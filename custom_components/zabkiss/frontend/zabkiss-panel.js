@@ -1,8 +1,8 @@
 const ACTIONABLE_DOMAINS = new Set([
-  'button', 'climate', 'cover', 'fan', 'humidifier',
+  'binary_sensor', 'button', 'climate', 'cover', 'fan', 'humidifier',
   'input_boolean', 'input_button', 'input_number', 'input_select',
   'light', 'lock', 'media_player', 'number', 'remote',
-  'scene', 'script', 'select', 'siren', 'switch', 'vacuum',
+  'scene', 'script', 'select', 'sensor', 'siren', 'switch', 'vacuum',
   'water_heater',
 ]);
 
