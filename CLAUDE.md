@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ZabKiss is a Home Assistant automation system that accepts natural language commands from any source (HTTP client, voice assistant, chat bot, mobile app) and routes them through a policy-gated LLM to control smart home devices. It consists of two HA components:
 
-1. **HA Custom Integration** (`integration/custom_components/zabkiss/`) — Python, manages policy/whitelist, provides UI panel, exposes REST API for the add-on
+1. **HA Custom Integration** (`custom_components/zabkiss/`) — Python, manages policy/whitelist, provides UI panel, exposes REST API for the add-on
 2. **HA Custom Add-on** (`addon/`) — Go + Gin HTTP server, handles Alice webhooks, orchestrates LLM calls, validates responses, calls HA API
 
 ## Repository Structure
@@ -23,15 +23,15 @@ addon/
       config/           # Runtime config loader from /data/options.json
     Dockerfile          # distroless/static runtime, CGO_ENABLED=0
   config.yaml           # HA Supervisor add-on manifest + options schema
-integration/
-  custom_components/zabkiss/
-    __init__.py         # Setup: registers REST API view + frontend panel
-    api.py              # GET /api/zabkiss/policy (requires_auth=True)
-    storage.py          # HA Storage helper wrapper for policy persistence
-    config_flow.py      # HA config entry
-    panel.py            # Lovelace panel registration
-    frontend/           # Lit element UI for policy management
-      zabkiss-panel.js  # Built artifact committed to repo
+custom_components/zabkiss/
+  __init__.py         # Setup: registers REST API view + frontend panel
+  api.py              # GET /api/zabkiss/policy (requires_auth=True)
+  storage.py          # HA Storage helper wrapper for policy persistence
+  config_flow.py      # HA config entry
+  panel.py            # Lovelace panel registration
+  frontend/           # Lit element UI for policy management
+    zabkiss-panel.js  # Built artifact committed to repo
+hacs.json             # HACS integration descriptor
 .github/workflows/
   ci.yml                # Build + test on PR
   release.yml           # Tag → build multi-arch → push GHCR

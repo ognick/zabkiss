@@ -148,7 +148,7 @@ func prepareHAConfig(t *testing.T) string {
 	}
 
 	// Copy integration files into the config dir
-	src, err := filepath.Abs(filepath.Join("..", "..", "..", "integration", "custom_components", "zabkiss"))
+	src, err := filepath.Abs(filepath.Join("..", "..", "..", "custom_components", "zabkiss"))
 	if err != nil {
 		t.Fatal(err)
 	}
