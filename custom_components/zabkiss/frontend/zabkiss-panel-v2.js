@@ -217,7 +217,7 @@ class ZabKissPanel extends HTMLElement {
 
     this.shadowRoot.innerHTML = `
       <style>${STYLES}</style>
-      <h1>ZabKiss — доступные устройства</h1>
+      <h1>ZabKiss — доступные устройства <small style="font-size:0.6em;color:#aaa">v0.2.1 (${groups.length} групп)</small></h1>
       ${cards}
       <div class="save-bar">
         <button class="save-btn" id="save-btn">Сохранить</button>

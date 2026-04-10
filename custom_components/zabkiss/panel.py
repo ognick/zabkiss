@@ -24,6 +24,6 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         frontend_url_path="zabkiss",
         sidebar_title="ZabKiss",
         sidebar_icon="mdi:shield-check",
-        module_url=f"{_STATIC_URL}/zabkiss-panel.js?v={_VERSION}",
+        module_url=f"{_STATIC_URL}/zabkiss-panel-v2.js",
         require_admin=True,
     )
