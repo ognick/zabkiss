@@ -39,7 +39,7 @@ func TestWebhook_Unauthenticated_ReturnsAccountLinking(t *testing.T) {
 func TestWebhook_Success(t *testing.T) {
 	user := &domain.User{ID: "u1", Name: "Иван", Email: "ivan@home.ru", Token: "tok"}
 	echo := &mockEcho{reply: "включаю свет"}
-	h := &Handler{log: &mockLogger{}, echoSrv: echo, auth: &mockAuth{user: user}, allowedEmails: []string{"ivan@home.ru"}}
+	h := &Handler{log: &mockLogger{}, echoSrv: echo, auth: &mockAuth{user: user}, policy: &mockPolicy{}, allowedEmails: []string{"ivan@home.ru"}}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}},"request":{"command":"включи свет"}}`
 	r := httptest.NewRequest(http.MethodPost, "/alice/webhook", strings.NewReader(body))
@@ -121,7 +121,7 @@ func TestWebhook_EchoError(t *testing.T) {
 	log := &mockLogger{}
 	user := &domain.User{ID: "u1", Name: "Иван", Email: "ivan@home.ru", Token: "tok"}
 	echo := &mockEcho{err: errors.New("llm down")}
-	h := &Handler{log: log, echoSrv: echo, auth: &mockAuth{user: user}, allowedEmails: []string{"ivan@home.ru"}}
+	h := &Handler{log: log, echoSrv: echo, auth: &mockAuth{user: user}, policy: &mockPolicy{}, allowedEmails: []string{"ivan@home.ru"}}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}},"request":{"command":"включи свет"}}`
 	r := httptest.NewRequest(http.MethodPost, "/alice/webhook", strings.NewReader(body))

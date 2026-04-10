@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -98,12 +99,25 @@ type echoStub struct {
 	err   error
 }
 
-func (e *echoStub) Say(_ string) (string, error) { return e.reply, e.err }
+func (e *echoStub) Say(_ context.Context, _ string, _ []string) (string, error) {
+	return e.reply, e.err
+}
 
 // panicEchoStub simulates a catastrophic failure in the echo service.
 type panicEchoStub struct{}
 
-func (e *panicEchoStub) Say(_ string) (string, error) { panic("simulated LLM panic") }
+func (e *panicEchoStub) Say(_ context.Context, _ string, _ []string) (string, error) {
+	panic("simulated LLM panic")
+}
+
+// policyStub returns a fixed list of entities (empty by default).
+type policyStub struct {
+	entities []string
+}
+
+func (p *policyStub) GetEntities(_ context.Context) ([]string, error) {
+	return p.entities, nil
+}
 
 // ── Test server ───────────────────────────────────────────────────────────────
 
@@ -152,7 +166,7 @@ func newServer(t *testing.T, cfg serverConfig) *testServer {
 
 	r := chi.NewRouter()
 	r.Use(httpserver.RecoveryMiddleware(log))
-	alice.New(echo, auth, log, cfg.allowedEmails).Register(r)
+	alice.New(echo, auth, &policyStub{}, log, cfg.allowedEmails).Register(r)
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
@@ -166,7 +180,9 @@ func newServer(t *testing.T, cfg serverConfig) *testServer {
 
 // newServerWithCustomEcho is used when tests need non-standard echo behaviour
 // (e.g., panic injection). Accepts any value with a Say method.
-func newServerWithCustomEcho(t *testing.T, echo interface{ Say(string) (string, error) }, cfg serverConfig) *testServer {
+func newServerWithCustomEcho(t *testing.T, echo interface {
+	Say(context.Context, string, []string) (string, error)
+}, cfg serverConfig) *testServer {
 	t.Helper()
 
 	db, err := sql.Open("sqlite", ":memory:")
@@ -187,7 +203,7 @@ func newServerWithCustomEcho(t *testing.T, echo interface{ Say(string) (string, 
 
 	r := chi.NewRouter()
 	r.Use(httpserver.RecoveryMiddleware(log))
-	alice.New(echo, auth, log, cfg.allowedEmails).Register(r)
+	alice.New(echo, auth, &policyStub{}, log, cfg.allowedEmails).Register(r)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

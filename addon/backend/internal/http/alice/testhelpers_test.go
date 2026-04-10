@@ -55,6 +55,15 @@ type mockEcho struct {
 	err   error
 }
 
-func (m *mockEcho) Say(_ string) (string, error) {
+func (m *mockEcho) Say(_ context.Context, _ string, _ []string) (string, error) {
 	return m.reply, m.err
+}
+
+type mockPolicy struct {
+	entities []string
+	err      error
+}
+
+func (m *mockPolicy) GetEntities(_ context.Context) ([]string, error) {
+	return m.entities, m.err
 }
