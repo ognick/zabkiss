@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -20,8 +22,12 @@ var (
 	errAuth      = errors.New("пожалуйста авторизуйтесь для продолжения")
 )
 
-type echoSrv interface {
-	Say(text string) (string, error)
+// requestBudget — сколько времени до истечения Alice-таймаута мы резервируем
+// на отправку ответа с учётом сетевой задержки и JSON-кодирования.
+const requestBudget = 1500 * time.Millisecond
+
+type commandService interface {
+	Process(ctx context.Context, sessionID, command string) (domain.CommandResult, error)
 }
 
 type userResolver interface {
@@ -29,14 +35,13 @@ type userResolver interface {
 }
 
 type Handler struct {
-	echoSrv       echoSrv
-	auth          userResolver
-	log           logger.Logger
-	allowedEmails []string
+	svc  commandService
+	auth userResolver
+	log  logger.Logger
 }
 
-func New(echoSrv echoSrv, auth userResolver, log logger.Logger, allowedEmails []string) *Handler {
-	return &Handler{echoSrv: echoSrv, auth: auth, log: log, allowedEmails: allowedEmails}
+func New(svc commandService, auth userResolver, log logger.Logger) *Handler {
+	return &Handler{svc: svc, auth: auth, log: log}
 }
 
 func (h *Handler) Register(r chi.Router) {
@@ -69,6 +74,14 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.resolveAuth(r.Context(), req)
 	if err != nil {
+		if errors.Is(err, errForbidden) {
+			msg := fmt.Sprintf("%s, %s", user.Name, errForbidden.Error())
+			h.write(w, aliceResponse{
+				Version:  version,
+				Response: responseBody{Text: msg, TTS: msg},
+			})
+			return
+		}
 		if !errors.Is(err, errAuth) {
 			h.log.Error(err.Error())
 		}
@@ -82,34 +95,40 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.isAllowed(user.Email) {
-		msg := fmt.Sprintf("%s, у вас нет доступа", user.Name)
-		h.write(w, aliceResponse{
-			Version:  version,
-			Response: responseBody{Text: msg, TTS: msg},
-		})
-		return
-	}
-
-	text, err := h.echoSrv.Say(req.Request.Command)
-	if err != nil {
-		h.writeError(w, fmt.Errorf("%s, произошла ошибка", user.Name))
-		return
-	}
-
-	h.write(w, aliceResponse{
-		Version:  version,
-		Response: responseBody{Text: text, TTS: text},
-	})
-}
-
-func (h *Handler) isAllowed(email string) bool {
-	for _, e := range h.allowedEmails {
-		if e == email {
-			return true
+	// Применяем бюджет таймаута Алисы: Request-Timeout в микросекундах.
+	ctx := r.Context()
+	if v := r.Header.Get("Request-Timeout"); v != "" {
+		if us, err := strconv.ParseInt(v, 10, 64); err == nil && us > 0 {
+			timeout := time.Duration(us) * time.Microsecond
+			if timeout > requestBudget {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, time.Now().Add(timeout-requestBudget))
+				defer cancel()
+			}
 		}
 	}
-	return false
+
+	result, err := h.svc.Process(ctx, req.Session.SessionID, req.Request.Command)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			msg := fmt.Sprintf("%s, не успел обработать запрос, попробуйте ещё раз", user.Name)
+			h.write(w, aliceResponse{
+				Version:  version,
+				Response: responseBody{Text: msg, TTS: msg, EndSession: true},
+			})
+			return
+		}
+		h.log.Error("process command", "err", err)
+		h.writeError(w, fmt.Errorf("%s, произошла ошибка при обработке команды", user.Name))
+		return
+	}
+
+	text := result.Reply
+	endSession := result.Status != domain.CommandClarify
+	h.write(w, aliceResponse{
+		Version:  version,
+		Response: responseBody{Text: text, TTS: text, EndSession: endSession},
+	})
 }
 
 func (h *Handler) resolveAuth(ctx context.Context, req aliceRequest) (domain.User, error) {
@@ -118,11 +137,7 @@ func (h *Handler) resolveAuth(ctx context.Context, req aliceRequest) (domain.Use
 	if token == "" || yandexID == "" {
 		return domain.User{}, errAuth
 	}
-	user, err := h.auth.ResolveUser(ctx, token)
-	if err != nil {
-		return domain.User{}, fmt.Errorf("resolve user: %w", err)
-	}
-	return user, nil
+	return h.auth.ResolveUser(ctx, token)
 }
 
 func (h *Handler) write(w http.ResponseWriter, resp aliceResponse) {

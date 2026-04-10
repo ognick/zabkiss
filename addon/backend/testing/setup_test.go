@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	_ "modernc.org/sqlite"
 
+	"github.com/ognick/zabkiss/internal/domain"
 	"github.com/ognick/zabkiss/internal/http/alice"
 	sqliterepo "github.com/ognick/zabkiss/internal/repository/sqlite"
 	"github.com/ognick/zabkiss/pkg/httpserver"
@@ -23,15 +24,12 @@ import (
 
 // ── Yandex OAuth mock ─────────────────────────────────────────────────────────
 
-// yandexUser is the user info that the mock Yandex API will return for a given token.
 type yandexUser struct {
 	ID    string
 	Name  string
 	Email string
 }
 
-// yandexMock is a fake Yandex OAuth server. It returns the registered user for
-// known tokens and 401 for everything else.
 type yandexMock struct {
 	mu    sync.RWMutex
 	users map[string]yandexUser
@@ -62,14 +60,12 @@ func newYandexMock(t *testing.T) *yandexMock {
 	return m
 }
 
-// register makes the mock accept the given token and return the given user.
 func (m *yandexMock) register(token string, u yandexUser) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.users[token] = u
 }
 
-// client returns an *http.Client that routes all requests to the mock server.
 func (m *yandexMock) client() *http.Client {
 	return &http.Client{Transport: &singleHostTransport{
 		target: m.Srv.URL,
@@ -77,8 +73,6 @@ func (m *yandexMock) client() *http.Client {
 	}}
 }
 
-// singleHostTransport redirects every outgoing HTTP request to a fixed host,
-// preserving the path and headers. Used to redirect Yandex API calls to a mock.
 type singleHostTransport struct {
 	target string
 	base   *http.Transport
@@ -92,22 +86,25 @@ func (t *singleHostTransport) RoundTrip(r *http.Request) (*http.Response, error)
 	return t.base.RoundTrip(cloned)
 }
 
-// ── Echo stub ─────────────────────────────────────────────────────────────────
+// ── Service stub ──────────────────────────────────────────────────────────────
 
-type echoStub struct {
+type serviceStub struct {
 	reply string
 	err   error
 }
 
-func (e *echoStub) Say(_ context.Context, _ string, _ []string) (string, error) {
-	return e.reply, e.err
+func (s *serviceStub) Process(_ context.Context, _, _ string) (domain.CommandResult, error) {
+	if s.err != nil {
+		return domain.CommandResult{}, s.err
+	}
+	return domain.CommandResult{Status: domain.CommandOK, Reply: s.reply}, nil
 }
 
-// panicEchoStub simulates a catastrophic failure in the echo service.
-type panicEchoStub struct{}
+// panicServiceStub simulates a catastrophic failure in the service layer.
+type panicServiceStub struct{}
 
-func (e *panicEchoStub) Say(_ context.Context, _ string, _ []string) (string, error) {
-	panic("simulated LLM panic")
+func (s *panicServiceStub) Process(_ context.Context, _, _ string) (domain.CommandResult, error) {
+	panic("simulated service panic")
 }
 
 // policyStub returns a fixed list of entities (empty by default).
@@ -121,23 +118,18 @@ func (p *policyStub) GetEntities(_ context.Context) ([]string, error) {
 
 // ── Test server ───────────────────────────────────────────────────────────────
 
-// testServer is a fully wired-up instance of the service running on a
-// random port. All external dependencies are replaced with in-process mocks.
 type testServer struct {
 	URL    string
 	Yandex *yandexMock
-	echo   *echoStub
+	svc    *serviceStub
 }
 
 type serverConfig struct {
 	allowedEmails []string
-	echoReply     string
-	echoErr       error
+	echoReply     string // LLM reply text (legacy name kept for test readability)
+	echoErr       error  // LLM/service error (legacy name kept for test readability)
 }
 
-// newServer starts a test server and registers cleanup with t.Cleanup.
-// Components: real chi router + RecoveryMiddleware + alice.Handler +
-// real YandexAuth pointing at the mock + in-memory SQLite.
 func newServer(t *testing.T, cfg serverConfig) *testServer {
 	t.Helper()
 
@@ -154,19 +146,19 @@ func newServer(t *testing.T, cfg serverConfig) *testServer {
 	}
 
 	yandex := newYandexMock(t)
-	auth := alice.NewAuth(userRepo).WithHTTPClient(yandex.client())
+	auth := alice.NewAuth(userRepo, cfg.allowedEmails).WithHTTPClient(yandex.client())
 
 	reply := cfg.echoReply
 	if reply == "" {
 		reply = "ответ системы"
 	}
-	echo := &echoStub{reply: reply, err: cfg.echoErr}
+	svc := &serviceStub{reply: reply, err: cfg.echoErr}
 
 	log := newTestLogger(t)
 
 	r := chi.NewRouter()
 	r.Use(httpserver.RecoveryMiddleware(log))
-	alice.New(echo, auth, &policyStub{}, log, cfg.allowedEmails).Register(r)
+	alice.New(svc, auth, log).Register(r)
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
@@ -175,13 +167,13 @@ func newServer(t *testing.T, cfg serverConfig) *testServer {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	return &testServer{URL: srv.URL, Yandex: yandex, echo: echo}
+	return &testServer{URL: srv.URL, Yandex: yandex, svc: svc}
 }
 
-// newServerWithCustomEcho is used when tests need non-standard echo behaviour
-// (e.g., panic injection). Accepts any value with a Say method.
-func newServerWithCustomEcho(t *testing.T, echo interface {
-	Say(context.Context, string, []string) (string, error)
+// newServerWithCustomService is used when tests need non-standard service behaviour
+// (e.g., panic injection). Accepts any value implementing the commandService interface.
+func newServerWithCustomService(t *testing.T, svc interface {
+	Process(context.Context, string, string) (domain.CommandResult, error)
 }, cfg serverConfig) *testServer {
 	t.Helper()
 
@@ -198,12 +190,12 @@ func newServerWithCustomEcho(t *testing.T, echo interface {
 	}
 
 	yandex := newYandexMock(t)
-	auth := alice.NewAuth(userRepo).WithHTTPClient(yandex.client())
+	auth := alice.NewAuth(userRepo, cfg.allowedEmails).WithHTTPClient(yandex.client())
 	log := newTestLogger(t)
 
 	r := chi.NewRouter()
 	r.Use(httpserver.RecoveryMiddleware(log))
-	alice.New(echo, auth, &policyStub{}, log, cfg.allowedEmails).Register(r)
+	alice.New(svc, auth, log).Register(r)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -279,7 +271,6 @@ type directives struct {
 
 // ── Request builders ──────────────────────────────────────────────────────────
 
-// authedReq builds an Alice webhook JSON body for an authenticated user.
 func authedReq(userID, token, command string) string {
 	return fmt.Sprintf(
 		`{"session":{"session_id":"s1","message_id":1,"user":{"user_id":%q,"access_token":%q}},"request":{"command":%q,"original_utterance":%q}}`,
@@ -287,7 +278,6 @@ func authedReq(userID, token, command string) string {
 	)
 }
 
-// unauthReq builds a request with no credentials.
 func unauthReq(command string) string {
 	return fmt.Sprintf(
 		`{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"","access_token":""}},"request":{"command":%q,"original_utterance":%q}}`,
@@ -295,7 +285,6 @@ func unauthReq(command string) string {
 	)
 }
 
-// pingReq builds an Alice health-check request (bypasses auth).
 func pingReq() string {
 	return `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"","access_token":""}},"request":{"command":"","original_utterance":"ping"}}`
 }

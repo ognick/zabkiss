@@ -19,7 +19,7 @@ import (
 
 // Attack: send a valid token but omit user_id (no OAuth linked on Alice side).
 func TestSecurity_OnlyToken_NoUserID_Rejected(t *testing.T) {
-	h := &Handler{log: &mockLogger{}, echoSrv: &mockEcho{reply: "не должно выполниться"}, auth: &mockAuth{}}
+	h := &Handler{log: &mockLogger{}, svc: &mockService{}, auth: &mockAuth{}}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"","access_token":"valid-tok"}}}`
 	var resp aliceResponse
@@ -29,7 +29,7 @@ func TestSecurity_OnlyToken_NoUserID_Rejected(t *testing.T) {
 
 // Attack: send a user_id but omit the OAuth token.
 func TestSecurity_OnlyUserID_NoToken_Rejected(t *testing.T) {
-	h := &Handler{log: &mockLogger{}, echoSrv: &mockEcho{reply: "не должно выполниться"}, auth: &mockAuth{}}
+	h := &Handler{log: &mockLogger{}, svc: &mockService{}, auth: &mockAuth{}}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":""}}}`
 	var resp aliceResponse
@@ -39,13 +39,13 @@ func TestSecurity_OnlyUserID_NoToken_Rejected(t *testing.T) {
 
 // ── Command gate ─────────────────────────────────────────────────────────────
 
-// Auth failure must block command execution: echoSrv.Say must never be called.
-func TestSecurity_EchoNotCalledOnAuthFailure(t *testing.T) {
+// Auth failure must block command execution: service must never be called.
+func TestSecurity_ServiceNotCalledOnAuthFailure(t *testing.T) {
 	const sentinel = "КОМАНДА_БЕЗ_АВТОРИЗАЦИИ"
 	h := &Handler{
-		log:     &mockLogger{},
-		echoSrv: &mockEcho{reply: sentinel},
-		auth:    &mockAuth{err: errors.New("db down")},
+		log:  &mockLogger{},
+		svc:  &mockService{result: domain.CommandResult{Status: domain.CommandOK, Reply: sentinel}},
+		auth: &mockAuth{err: errors.New("db down")},
 	}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}},"request":{"command":"включи весь свет"}}`
@@ -59,14 +59,13 @@ func TestSecurity_EchoNotCalledOnAuthFailure(t *testing.T) {
 }
 
 // Email block must also prevent command execution.
-func TestSecurity_EchoNotCalledOnEmailBlock(t *testing.T) {
+func TestSecurity_ServiceNotCalledOnEmailBlock(t *testing.T) {
 	const sentinel = "КОМАНДА_БЕЗ_ДОСТУПА"
 	user := &domain.User{ID: "u1", Name: "Злоумышленник", Email: "bad@evil.com"}
 	h := &Handler{
-		log:           &mockLogger{},
-		echoSrv:       &mockEcho{reply: sentinel},
-		auth:          &mockAuth{user: user},
-		allowedEmails: []string{"trusted@home.ru"},
+		log:  &mockLogger{},
+		svc:  &mockService{result: domain.CommandResult{Status: domain.CommandOK, Reply: sentinel}},
+		auth: &mockAuth{user: user, err: errForbidden},
 	}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}},"request":{"command":"открой замок"}}`
@@ -81,12 +80,12 @@ func TestSecurity_EchoNotCalledOnEmailBlock(t *testing.T) {
 
 // ── Error isolation ───────────────────────────────────────────────────────────
 
-// Internal error messages (DB address, stack trace fragments) must never
-// reach the client — attacker must not learn anything about infrastructure.
+// Internal error messages must never reach the client.
 func TestSecurity_InternalAuthError_NotLeakedToClient(t *testing.T) {
 	internalMsg := "dial tcp 10.0.0.5:5432: connection refused"
 	h := &Handler{
 		log:  &mockLogger{},
+		svc:  &mockService{},
 		auth: &mockAuth{err: errors.New(internalMsg)},
 	}
 
@@ -103,87 +102,46 @@ func TestSecurity_InternalAuthError_NotLeakedToClient(t *testing.T) {
 	assertAccountLinking(t, resp)
 }
 
-// ── Email allowlist (isAllowed) ───────────────────────────────────────────────
+// ── Email allowlist (YandexAuth.checkAllowed) ────────────────────────────────
 
-func TestSecurity_IsAllowed(t *testing.T) {
+func TestSecurity_Allowlist(t *testing.T) {
 	tests := []struct {
 		name          string
 		allowedEmails []string
 		email         string
-		wantAllowed   bool
+		wantForbidden bool
 	}{
-		{
-			name:          "nil allowlist blocks all",
-			allowedEmails: nil,
-			email:         "anyone@evil.com",
-			wantAllowed:   false,
-		},
-		{
-			name:          "empty allowlist blocks all",
-			allowedEmails: []string{},
-			email:         "anyone@evil.com",
-			wantAllowed:   false,
-		},
-		{
-			name:          "email in list",
-			allowedEmails: []string{"alice@home.ru", "bob@home.ru"},
-			email:         "alice@home.ru",
-			wantAllowed:   true,
-		},
-		{
-			name:          "email not in list",
-			allowedEmails: []string{"alice@home.ru"},
-			email:         "evil@attacker.com",
-			wantAllowed:   false,
-		},
-		{
-			// Attacker tries "ALICE@HOME.RU" when allowlist has "alice@home.ru".
-			name:          "case mismatch rejected",
-			allowedEmails: []string{"alice@home.ru"},
-			email:         "ALICE@HOME.RU",
-			wantAllowed:   false,
-		},
-		{
-			// Attacker registers "alice@home.ru.evil.com" to match "alice@home.ru".
-			name:          "domain suffix not confused with subdomain",
-			allowedEmails: []string{"alice@home.ru"},
-			email:         "alice@home.ru.evil.com",
-			wantAllowed:   false,
-		},
-		{
-			// Attacker uses email that is a prefix of an allowed email.
-			name:          "prefix match rejected",
-			allowedEmails: []string{"alice@home.ru"},
-			email:         "alice@home.r",
-			wantAllowed:   false,
-		},
-		{
-			// Attacker uses whitespace padding to fool naive comparison.
-			name:          "leading space rejected",
-			allowedEmails: []string{"alice@home.ru"},
-			email:         " alice@home.ru",
-			wantAllowed:   false,
-		},
+		{name: "nil allowlist blocks all", allowedEmails: nil, email: "anyone@evil.com", wantForbidden: true},
+		{name: "empty allowlist blocks all", allowedEmails: []string{}, email: "anyone@evil.com", wantForbidden: true},
+		{name: "email in list", allowedEmails: []string{"alice@home.ru", "bob@home.ru"}, email: "alice@home.ru", wantForbidden: false},
+		{name: "email not in list", allowedEmails: []string{"alice@home.ru"}, email: "evil@attacker.com", wantForbidden: true},
+		{name: "case mismatch rejected", allowedEmails: []string{"alice@home.ru"}, email: "ALICE@HOME.RU", wantForbidden: true},
+		{name: "domain suffix not confused with subdomain", allowedEmails: []string{"alice@home.ru"}, email: "alice@home.ru.evil.com", wantForbidden: true},
+		{name: "prefix match rejected", allowedEmails: []string{"alice@home.ru"}, email: "alice@home.r", wantForbidden: true},
+		{name: "leading space rejected", allowedEmails: []string{"alice@home.ru"}, email: " alice@home.ru", wantForbidden: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := &Handler{allowedEmails: tc.allowedEmails}
-			if got := h.isAllowed(tc.email); got != tc.wantAllowed {
-				t.Errorf("isAllowed(%q) = %v, want %v", tc.email, got, tc.wantAllowed)
+			user := &domain.User{ID: "u1", Email: tc.email, Token: "tok"}
+			a := NewAuth(&mockUserRepo{user: user}, tc.allowedEmails)
+			_, err := a.ResolveUser(context.Background(), "tok")
+			if tc.wantForbidden && !errors.Is(err, errForbidden) {
+				t.Errorf("expected errForbidden, got: %v", err)
+			}
+			if !tc.wantForbidden && err != nil {
+				t.Errorf("expected no error, got: %v", err)
 			}
 		})
 	}
 }
 
-// Verified email that is not in the allowlist gets a denial message — not a
-// system error, not an account-linking directive.
+// Verified email not in allowlist gets a denial message — not a system error.
 func TestSecurity_AllowlistDenial_CorrectResponse(t *testing.T) {
 	user := &domain.User{ID: "u1", Name: "Иван", Email: "ivan@other.com"}
 	h := &Handler{
-		log:           &mockLogger{},
-		echoSrv:       &mockEcho{},
-		auth:          &mockAuth{user: user},
-		allowedEmails: []string{"owner@home.ru"},
+		log:  &mockLogger{},
+		svc:  &mockService{},
+		auth: &mockAuth{user: user, err: errForbidden},
 	}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}}}`
@@ -191,11 +149,9 @@ func TestSecurity_AllowlistDenial_CorrectResponse(t *testing.T) {
 
 	var resp aliceResponse
 	mustDecode(t, w, &resp)
-	// Must mention the user's name (personalised denial), not a generic auth error.
 	if !strings.Contains(resp.Response.Text, "Иван") {
 		t.Errorf("denial message should include user name, got: %q", resp.Response.Text)
 	}
-	// Must NOT start account linking — user IS authenticated, just not authorised.
 	if resp.Response.Directives != nil && resp.Response.Directives.StartAccountLinking != nil {
 		t.Error("account linking should not be triggered for authorised-but-denied user")
 	}
@@ -203,8 +159,6 @@ func TestSecurity_AllowlistDenial_CorrectResponse(t *testing.T) {
 
 // ── YandexAuth: fail-closed behaviour ────────────────────────────────────────
 
-// Attack: present a token that Yandex rejects with HTTP 401.
-// System must fail closed — not silently grant access.
 func TestSecurity_YandexNon200_FailsClosed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -212,7 +166,7 @@ func TestSecurity_YandexNon200_FailsClosed(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := NewAuth(&mockUserRepo{})
+	a := NewAuth(&mockUserRepo{}, nil)
 	a.httpClient = testClient(srv.URL)
 
 	_, err := a.ResolveUser(context.Background(), "stolen-or-expired-token")
@@ -221,14 +175,12 @@ func TestSecurity_YandexNon200_FailsClosed(t *testing.T) {
 	}
 }
 
-// Attack: Yandex API is completely unreachable (network error).
-// System must fail closed — not grant access because it "can't verify".
 func TestSecurity_YandexUnreachable_FailsClosed(t *testing.T) {
 	srv := httptest.NewServer(nil)
 	url := srv.URL
-	srv.Close() // shut down immediately to simulate unreachable endpoint
+	srv.Close()
 
-	a := NewAuth(&mockUserRepo{})
+	a := NewAuth(&mockUserRepo{}, nil)
 	a.httpClient = testClient(url)
 
 	_, err := a.ResolveUser(context.Background(), "some-token")
@@ -237,15 +189,13 @@ func TestSecurity_YandexUnreachable_FailsClosed(t *testing.T) {
 	}
 }
 
-// Attack: Yandex returns 200 but with an empty user ID (invalid/revoked token
-// that Yandex returns a placeholder response for).
 func TestSecurity_YandexEmptyID_FailsClosed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(yandexUserInfo{ID: "", RealName: "", DefaultEmail: ""})
 	}))
 	defer srv.Close()
 
-	a := NewAuth(&mockUserRepo{})
+	a := NewAuth(&mockUserRepo{}, nil)
 	a.httpClient = testClient(srv.URL)
 
 	_, err := a.ResolveUser(context.Background(), "revoked-token")

@@ -14,8 +14,18 @@ image: "ghcr.io/ognick/zabkiss/zabkiss-addon/{arch}"
 options:
   log_level: "info"
   openai_api_key: ""
+  llm_base_url: "https://api.openai.com/v1"
+  llm_model: "gpt-4o-mini"
   allowed_emails: []
+  ha_token: ""
+  ha_url: "http://homeassistant:8123"
+  policy_cache_ttl_seconds: 60
 schema:
   log_level: list(debug|info|warn|error)
   openai_api_key: str
+  llm_base_url: str
+  llm_model: str
   allowed_emails: [str]
+  ha_token: str
+  ha_url: str
+  policy_cache_ttl_seconds: int

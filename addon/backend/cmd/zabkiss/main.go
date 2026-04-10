@@ -7,12 +7,17 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/ognick/goscade/v2"
 	"github.com/ognick/zabkiss/internal/config"
+	"github.com/ognick/zabkiss/internal/ha"
 	"github.com/ognick/zabkiss/internal/http/alice"
+	"github.com/ognick/zabkiss/internal/llm"
+	"github.com/ognick/zabkiss/internal/policy"
+	"github.com/ognick/zabkiss/internal/service"
 	sqliterepo "github.com/ognick/zabkiss/internal/repository/sqlite"
 	"github.com/ognick/zabkiss/pkg/httpserver"
 	"github.com/ognick/zabkiss/pkg/logger"
@@ -47,7 +52,18 @@ func main() {
 	if level == slog.LevelDebug {
 		r.Use(httpserver.DebugMiddleware())
 	}
-	alice.New(&echoStub{}, alice.NewAuth(userRepo), log, cfg.AllowedEmails).Register(r)
+
+	policyClient := policy.NewClient(
+		cfg.HAURL,
+		cfg.HAToken,
+		time.Duration(cfg.PolicyCacheTTLSeconds)*time.Second,
+		log,
+	)
+	haClient := ha.NewClient(cfg.HAURL, cfg.HAToken)
+	llmClient := llm.NewClient(cfg.LLMBaseURL, cfg.OpenAIAPIKey, cfg.LLMModel)
+	svc := service.New(haClient, llmClient, policyClient, log)
+
+	alice.New(svc, alice.NewAuth(userRepo, cfg.AllowedEmails), log).Register(r)
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
@@ -63,19 +79,14 @@ func main() {
 
 	lc := goscade.NewLifecycle(log, goscade.WithShutdownHook())
 	goscade.Register(lc, db)
-	goscade.Register(lc, httpserver.New(cfg.Addr, r), db)
+	goscade.Register(lc, policyClient)
+	goscade.Register(lc, httpserver.New(cfg.Addr, r), db, policyClient)
 
 	if err := goscade.Run(context.Background(), lc, func() {
 		log.Info("ZabKiss ready", "addr", cfg.Addr)
 	}); err != nil {
 		log.Error("fatal", "err", err)
 	}
-}
-
-type echoStub struct{}
-
-func (s *echoStub) Say(text string) (string, error) {
-	return fmt.Sprintf("ты говоришь - %s, но пока нахожусь в режиме разработки.", text), nil
 }
 
 func localHost() string {

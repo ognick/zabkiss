@@ -29,28 +29,9 @@ func testClient(serverURL string) *http.Client {
 	return &http.Client{Transport: &redirectTransport{target: serverURL}}
 }
 
-func TestUserFromContext_Found(t *testing.T) {
-	user := domain.User{ID: "abc", Name: "Test"}
-	ctx := context.WithValue(context.Background(), contextKey{}, user)
-	got, ok := UserFromContext(ctx)
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if got.ID != "abc" {
-		t.Errorf("ID: got %q, want abc", got.ID)
-	}
-}
-
-func TestUserFromContext_NotFound(t *testing.T) {
-	_, ok := UserFromContext(context.Background())
-	if ok {
-		t.Fatal("expected ok=false")
-	}
-}
-
-func TestAuth_ResolveUser_ExistingToken(t *testing.T) {
-	existing := &domain.User{ID: "u1", Token: "tok"}
-	a := NewAuth(&mockUserRepo{user: existing})
+func TestAuth_ResolveUser_ExistingToken_Allowed(t *testing.T) {
+	existing := &domain.User{ID: "u1", Email: "ivan@home.ru", Token: "tok"}
+	a := NewAuth(&mockUserRepo{user: existing}, []string{"ivan@home.ru"})
 
 	user, err := a.ResolveUser(context.Background(), "tok")
 	if err != nil {
@@ -61,8 +42,18 @@ func TestAuth_ResolveUser_ExistingToken(t *testing.T) {
 	}
 }
 
+func TestAuth_ResolveUser_ExistingToken_Forbidden(t *testing.T) {
+	existing := &domain.User{ID: "u1", Email: "ivan@home.ru", Token: "tok"}
+	a := NewAuth(&mockUserRepo{user: existing}, []string{"other@home.ru"})
+
+	_, err := a.ResolveUser(context.Background(), "tok")
+	if !errors.Is(err, errForbidden) {
+		t.Errorf("expected errForbidden, got: %v", err)
+	}
+}
+
 func TestAuth_ResolveUser_GetError(t *testing.T) {
-	a := NewAuth(&mockUserRepo{getErr: errors.New("db down")})
+	a := NewAuth(&mockUserRepo{getErr: errors.New("db down")}, nil)
 
 	_, err := a.ResolveUser(context.Background(), "tok")
 	if err == nil {
@@ -81,7 +72,7 @@ func TestAuth_ResolveUser_NewUser(t *testing.T) {
 	defer srv.Close()
 
 	repo := &mockUserRepo{user: nil}
-	a := NewAuth(repo)
+	a := NewAuth(repo, []string{"ivan@ya.ru"})
 	a.httpClient = testClient(srv.URL)
 
 	user, err := a.ResolveUser(context.Background(), "mytoken")
@@ -105,7 +96,7 @@ func TestAuth_ResolveUser_InvalidToken_EmptyID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := NewAuth(&mockUserRepo{})
+	a := NewAuth(&mockUserRepo{}, nil)
 	a.httpClient = testClient(srv.URL)
 
 	_, err := a.ResolveUser(context.Background(), "bad")

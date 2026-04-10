@@ -13,7 +13,7 @@ import (
 )
 
 func TestWebhook_Unauthenticated_ReturnsAccountLinking(t *testing.T) {
-	h := &Handler{log: &mockLogger{}, echoSrv: &mockEcho{}, auth: &mockAuth{}}
+	h := &Handler{log: &mockLogger{}, svc: &mockService{}, auth: &mockAuth{}}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"","access_token":""}}}`
 	r := httptest.NewRequest(http.MethodPost, "/alice/webhook", strings.NewReader(body))
@@ -36,10 +36,10 @@ func TestWebhook_Unauthenticated_ReturnsAccountLinking(t *testing.T) {
 	}
 }
 
-func TestWebhook_Success(t *testing.T) {
+func TestWebhook_Success_EndsSession(t *testing.T) {
 	user := &domain.User{ID: "u1", Name: "Иван", Email: "ivan@home.ru", Token: "tok"}
-	echo := &mockEcho{reply: "включаю свет"}
-	h := &Handler{log: &mockLogger{}, echoSrv: echo, auth: &mockAuth{user: user}, policy: &mockPolicy{}, allowedEmails: []string{"ivan@home.ru"}}
+	svc := &mockService{result: domain.CommandResult{Status: domain.CommandOK, Reply: "включаю свет"}}
+	h := &Handler{log: &mockLogger{}, svc: svc, auth: &mockAuth{user: user}}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}},"request":{"command":"включи свет"}}`
 	r := httptest.NewRequest(http.MethodPost, "/alice/webhook", strings.NewReader(body))
@@ -57,17 +57,40 @@ func TestWebhook_Success(t *testing.T) {
 	if resp.Response.Text != "включаю свет" {
 		t.Errorf("Text: got %q, want включаю свет", resp.Response.Text)
 	}
-	if resp.Response.EndSession {
-		t.Error("EndSession should be false on success")
+	if !resp.Response.EndSession {
+		t.Error("EndSession should be true for status ok")
 	}
 	if resp.Response.Directives != nil {
 		t.Error("Directives should be nil on success")
 	}
 }
 
+func TestWebhook_Clarify_KeepsSession(t *testing.T) {
+	user := &domain.User{ID: "u1", Name: "Иван", Email: "ivan@home.ru", Token: "tok"}
+	svc := &mockService{result: domain.CommandResult{Status: domain.CommandClarify, Reply: "какую именно лампочку включить?"}}
+	h := &Handler{log: &mockLogger{}, svc: svc, auth: &mockAuth{user: user}}
+
+	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}},"request":{"command":"включи свет"}}`
+	r := httptest.NewRequest(http.MethodPost, "/alice/webhook", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	h.webhook(w, r)
+
+	var resp aliceResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Response.EndSession {
+		t.Error("EndSession should be false for status clarify")
+	}
+	if resp.Response.Text != "какую именно лампочку включить?" {
+		t.Errorf("Text: got %q", resp.Response.Text)
+	}
+}
+
 func TestWebhook_InvalidBody(t *testing.T) {
 	log := &mockLogger{}
-	h := &Handler{log: log, echoSrv: &mockEcho{}, auth: &mockAuth{}}
+	h := &Handler{log: log, svc: &mockService{}, auth: &mockAuth{}}
 
 	r := httptest.NewRequest(http.MethodPost, "/alice/webhook", strings.NewReader("{invalid"))
 	w := httptest.NewRecorder()
@@ -94,7 +117,7 @@ func TestWebhook_InvalidBody(t *testing.T) {
 
 func TestWebhook_AuthError_ReturnsAccountLinking(t *testing.T) {
 	log := &mockLogger{}
-	h := &Handler{log: log, echoSrv: &mockEcho{}, auth: &mockAuth{err: errors.New("db error")}}
+	h := &Handler{log: log, svc: &mockService{}, auth: &mockAuth{err: errors.New("db error")}}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}}}`
 	r := httptest.NewRequest(http.MethodPost, "/alice/webhook", strings.NewReader(body))
@@ -117,11 +140,33 @@ func TestWebhook_AuthError_ReturnsAccountLinking(t *testing.T) {
 	}
 }
 
-func TestWebhook_EchoError(t *testing.T) {
+func TestWebhook_Forbidden_ReturnsDenialWithName(t *testing.T) {
+	log := &mockLogger{}
+	user := &domain.User{ID: "u1", Name: "Злоумышленник", Email: "bad@evil.com"}
+	h := &Handler{log: log, svc: &mockService{}, auth: &mockAuth{user: user, err: errForbidden}}
+
+	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}}}`
+	r := httptest.NewRequest(http.MethodPost, "/alice/webhook", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	h.webhook(w, r)
+
+	var resp aliceResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Response.Text, "Злоумышленник") {
+		t.Errorf("denial should include user name, got: %q", resp.Response.Text)
+	}
+	if resp.Response.Directives != nil && resp.Response.Directives.StartAccountLinking != nil {
+		t.Error("forbidden should not trigger account linking")
+	}
+}
+
+func TestWebhook_ServiceError(t *testing.T) {
 	log := &mockLogger{}
 	user := &domain.User{ID: "u1", Name: "Иван", Email: "ivan@home.ru", Token: "tok"}
-	echo := &mockEcho{err: errors.New("llm down")}
-	h := &Handler{log: log, echoSrv: echo, auth: &mockAuth{user: user}, policy: &mockPolicy{}, allowedEmails: []string{"ivan@home.ru"}}
+	h := &Handler{log: log, svc: &mockService{err: errors.New("llm down")}, auth: &mockAuth{user: user}}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}},"request":{"command":"включи свет"}}`
 	r := httptest.NewRequest(http.MethodPost, "/alice/webhook", strings.NewReader(body))
@@ -137,10 +182,33 @@ func TestWebhook_EchoError(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !resp.Response.EndSession {
-		t.Error("EndSession should be true on echo error")
+		t.Error("EndSession should be true on service error")
 	}
 	if !strings.Contains(resp.Response.Text, "Иван") {
 		t.Errorf("Text should contain user name, got: %q", resp.Response.Text)
+	}
+}
+
+func TestWebhook_Timeout_ReturnsRetryMessage(t *testing.T) {
+	log := &mockLogger{}
+	user := &domain.User{ID: "u1", Name: "Иван", Email: "ivan@home.ru", Token: "tok"}
+	h := &Handler{log: log, svc: &mockService{err: context.DeadlineExceeded}, auth: &mockAuth{user: user}}
+
+	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}},"request":{"command":"включи свет"}}`
+	r := httptest.NewRequest(http.MethodPost, "/alice/webhook", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	h.webhook(w, r)
+
+	var resp aliceResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Response.EndSession {
+		t.Error("EndSession should be true on timeout")
+	}
+	if !strings.Contains(resp.Response.Text, "попробуйте ещё раз") {
+		t.Errorf("timeout message should suggest retry, got: %q", resp.Response.Text)
 	}
 }
 

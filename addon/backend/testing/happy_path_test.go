@@ -42,8 +42,8 @@ func TestE2E_ExistingUser_CommandExecuted(t *testing.T) {
 	if r1.Response.Text != want {
 		t.Fatalf("1st request: got %q, want %q", r1.Response.Text, want)
 	}
-	if r1.Response.EndSession {
-		t.Error("success must not end the session")
+	if !r1.Response.EndSession {
+		t.Error("success (status ok) must end the session")
 	}
 
 	// Second request: user now cached in DB. Yandex mock could be shut down

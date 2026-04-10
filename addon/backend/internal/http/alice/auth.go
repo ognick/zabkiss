@@ -3,6 +3,7 @@ package alice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -10,20 +11,22 @@ import (
 	"github.com/ognick/zabkiss/internal/repository"
 )
 
-type contextKey struct{}
+var errForbidden = errors.New("у вас нет доступа")
 
-func UserFromContext(ctx context.Context) (domain.User, bool) {
-	u, ok := ctx.Value(contextKey{}).(domain.User)
-	return u, ok
-}
-
+// YandexAuth resolves a Yandex OAuth token to a domain.User,
+// caching the result in the local DB.
 type YandexAuth struct {
-	userRepo   repository.UserRepo
-	httpClient *http.Client
+	userRepo      repository.UserRepo
+	httpClient    *http.Client
+	allowedEmails []string
 }
 
-func NewAuth(userRepo repository.UserRepo) *YandexAuth {
-	return &YandexAuth{userRepo: userRepo, httpClient: http.DefaultClient}
+func NewAuth(userRepo repository.UserRepo, allowedEmails []string) *YandexAuth {
+	return &YandexAuth{
+		userRepo:      userRepo,
+		httpClient:    http.DefaultClient,
+		allowedEmails: allowedEmails,
+	}
 }
 
 // WithHTTPClient replaces the HTTP client used for Yandex API calls.
@@ -39,7 +42,7 @@ func (a *YandexAuth) ResolveUser(ctx context.Context, token string) (domain.User
 		return domain.User{}, err
 	}
 	if existing != nil {
-		return *existing, nil
+		return a.checkAllowed(*existing)
 	}
 
 	info, err := fetchYandexUserInfo(ctx, a.httpClient, token)
@@ -59,7 +62,16 @@ func (a *YandexAuth) ResolveUser(ctx context.Context, token string) (domain.User
 	if err := a.userRepo.Upsert(ctx, user); err != nil {
 		return domain.User{}, err
 	}
-	return user, nil
+	return a.checkAllowed(user)
+}
+
+func (a *YandexAuth) checkAllowed(user domain.User) (domain.User, error) {
+	for _, e := range a.allowedEmails {
+		if e == user.Email {
+			return user, nil
+		}
+	}
+	return user, errForbidden
 }
 
 type yandexUserInfo struct {

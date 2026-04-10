@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ZabKiss",
+        "description": "Голосовое управление умным домом через Алису. Нажмите «Далее» для установки."
+      }
+    },
+    "abort": {
+      "already_configured": "ZabKiss уже настроен."
+    }
+  }
+}
