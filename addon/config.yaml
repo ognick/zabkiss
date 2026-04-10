@@ -1,6 +1,6 @@
 name: "ZabKiss"
 description: "Natural language smart home control via Alice voice assistant"
-version: "0.2.0"
+version: "0.2.1"
 slug: "zabkiss"
 init: false
 arch:

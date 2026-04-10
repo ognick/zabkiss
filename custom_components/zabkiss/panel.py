@@ -10,7 +10,7 @@ _FRONTEND_DIR = pathlib.Path(__file__).parent / "frontend"
 _STATIC_URL = "/api/zabkiss/frontend"
 
 # Cache-busting version — bump when frontend changes.
-_VERSION = "0.2.0"
+_VERSION = "0.2.1"
 
 
 async def async_setup_panel(hass: HomeAssistant) -> None:
