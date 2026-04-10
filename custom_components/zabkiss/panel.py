@@ -9,6 +9,9 @@ from homeassistant.core import HomeAssistant
 _FRONTEND_DIR = pathlib.Path(__file__).parent / "frontend"
 _STATIC_URL = "/api/zabkiss/frontend"
 
+# Cache-busting version — bump when frontend changes.
+_VERSION = "0.2.0"
+
 
 async def async_setup_panel(hass: HomeAssistant) -> None:
     await hass.http.async_register_static_paths([
@@ -21,6 +24,6 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         frontend_url_path="zabkiss",
         sidebar_title="ZabKiss",
         sidebar_icon="mdi:shield-check",
-        module_url=f"{_STATIC_URL}/zabkiss-panel.js",
+        module_url=f"{_STATIC_URL}/zabkiss-panel.js?v={_VERSION}",
         require_admin=True,
     )
