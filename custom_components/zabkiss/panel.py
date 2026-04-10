@@ -17,7 +17,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
 
     await async_register_panel(
         hass,
-        component_name="zabkiss-panel",
+        webcomponent_name="zabkiss-panel",
         frontend_url_path="zabkiss",
         sidebar_title="ZabKiss",
         sidebar_icon="mdi:shield-check",
