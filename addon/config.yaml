@@ -1,0 +1,21 @@
+name: "ZabKiss"
+description: "Natural language smart home control via Alice voice assistant"
+version: "0.1.0"
+slug: "zabkiss"
+init: false
+arch:
+  - aarch64
+  - amd64
+ports:
+  8080/tcp: 8080
+ports_description:
+  8080/tcp: "Alice webhook receiver"
+image: "ghcr.io/ognick/zabkiss/zabkiss-addon/{arch}"
+options:
+  log_level: "info"
+  openai_api_key: ""
+  allowed_emails: []
+schema:
+  log_level: list(debug|info|warn|error)
+  openai_api_key: str
+  allowed_emails: [str]
