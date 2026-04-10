@@ -30,8 +30,11 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/ognick/zabkiss/internal/domain"
+	"github.com/ognick/zabkiss/internal/ha"
 	"github.com/ognick/zabkiss/internal/http/alice"
 	"github.com/ognick/zabkiss/internal/policy"
+	"github.com/ognick/zabkiss/internal/service"
 	sqliterepo "github.com/ognick/zabkiss/internal/repository/sqlite"
 	"github.com/ognick/zabkiss/pkg/httpserver"
 )
@@ -145,7 +148,7 @@ func prepareHAConfig(t *testing.T) string {
 	}
 
 	// Copy integration files into the config dir
-	src, err := filepath.Abs(filepath.Join("..", "..", "integration", "custom_components", "zabkiss"))
+	src, err := filepath.Abs(filepath.Join("..", "..", "..", "integration", "custom_components", "zabkiss"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,8 +350,8 @@ func seedPolicy(t *testing.T, haURL, token string, entities []string) {
 	}
 }
 
-// newIntegrationServer creates a test server that uses a real policy.HAClient
-// pointing at the provided HA instance. Yandex OAuth is still mocked.
+// newIntegrationServer creates a test server wired to real HA + policy clients.
+// The LLM is stubbed to avoid calling a real API. Yandex OAuth is also mocked.
 func newIntegrationServer(t *testing.T, haURL, haToken string, allowedEmails []string) *testServer {
 	t.Helper()
 
@@ -365,25 +368,32 @@ func newIntegrationServer(t *testing.T, haURL, haToken string, allowedEmails []s
 	}
 
 	yandex := newYandexMock(t)
-	auth := alice.NewAuth(userRepo).WithHTTPClient(yandex.client())
-
 	log := newTestLogger(t)
+
+	// Real HA + policy clients; stub LLM so we don't call OpenAI in tests.
+	haClient := ha.NewClient(haURL, haToken)
 	policyClient := policy.NewClient(haURL, haToken, 30*time.Second, log)
+	svc := service.New(haClient, &integrationLLMStub{reply: "включаю свет"}, policyClient, log)
+
+	auth := alice.NewAuth(userRepo, allowedEmails).WithHTTPClient(yandex.client())
 
 	r := chi.NewRouter()
 	r.Use(httpserver.RecoveryMiddleware(log))
-	alice.New(
-		&echoStub{reply: "включаю свет"},
-		auth,
-		policyClient,
-		log,
-		allowedEmails,
-	).Register(r)
+	alice.New(svc, auth, log).Register(r)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
 	return &testServer{URL: srv.URL, Yandex: yandex}
+}
+
+// integrationLLMStub satisfies service.llmGateway without calling a real LLM.
+type integrationLLMStub struct {
+	reply string
+}
+
+func (s *integrationLLMStub) Execute(_ context.Context, _ string, _ []domain.Device, _ []domain.ChatMessage) (domain.CommandResult, error) {
+	return domain.CommandResult{Status: domain.CommandOK, Reply: s.reply}, nil
 }
 
 // ── File utils ────────────────────────────────────────────────────────────────
