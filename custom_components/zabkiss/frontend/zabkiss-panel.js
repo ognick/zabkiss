@@ -276,4 +276,6 @@ class ZabKissPanel extends HTMLElement {
   }
 }
 
-customElements.define('zabkiss-panel', ZabKissPanel);
+if (!customElements.get('zabkiss-panel')) {
+  customElements.define('zabkiss-panel', ZabKissPanel);
+}
