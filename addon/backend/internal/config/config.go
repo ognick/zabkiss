@@ -33,7 +33,7 @@ func Load() *Config {
 		AllowedEmails:         parseList(getEnv("ALLOWED_EMAILS", "")),
 		HAToken:               getEnv("HA_TOKEN", ""),
 		HAURL:                 getEnv("HA_URL", "http://homeassistant:8123"),
-		PolicyCacheTTLSeconds: parseInt(getEnv("POLICY_CACHE_TTL_SECONDS", "60")),
+		PolicyCacheTTLSeconds: parseInt(getEnv("POLICY_CACHE_TTL_SECONDS", "10")),
 	}
 }
 

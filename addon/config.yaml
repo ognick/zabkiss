@@ -19,7 +19,7 @@ options:
   allowed_emails: []
   ha_token: ""
   ha_url: "http://homeassistant:8123"
-  policy_cache_ttl_seconds: 60
+  policy_cache_ttl_seconds: 10
 schema:
   log_level: list(debug|info|warn|error)
   openai_api_key: str
