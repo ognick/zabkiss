@@ -57,21 +57,31 @@ func New(ha haGateway, llm llmGateway, policy policyGateway, log logger.Logger) 
 // Контекст ctx должен нести дедлайн, установленный хендлером на основе Request-Timeout.
 // При статусе ok запускает фоновую задачу вызова HA и возвращает управление сразу.
 func (s *SmartHomeService) Process(ctx context.Context, sessionID, command string) (domain.CommandResult, error) {
+	s.log.Info("process command", "session", sessionID, "command", command)
+
 	entities, err := s.policy.GetEntities(ctx)
 	if err != nil {
+		s.log.Error("policy fetch failed", "err", err)
 		return domain.CommandResult{}, err
 	}
+	s.log.Info("policy entities", "count", len(entities), "entities", entities)
 
 	devices, err := s.ha.GetDeviceInfos(ctx, entities)
 	if err != nil {
+		s.log.Error("ha device fetch failed", "err", err)
 		return domain.CommandResult{}, err
 	}
+	s.log.Info("ha devices loaded", "count", len(devices))
 
 	history := s.getHistory(sessionID)
+	s.log.Debug("session history", "session", sessionID, "messages", len(history))
+
 	result, err := s.llm.Execute(ctx, command, devices, history)
 	if err != nil {
+		s.log.Error("llm execute failed", "err", err)
 		return domain.CommandResult{}, err
 	}
+	s.log.Info("llm response", "status", result.Status, "reply", result.Reply, "actions", len(result.Actions))
 
 	switch result.Status {
 	case domain.CommandOK:
@@ -86,6 +96,7 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, command strin
 		s.setHistory(sessionID, updated)
 
 	default: // CommandReject
+		s.log.Warn("command rejected", "session", sessionID, "reply", result.Reply)
 		s.clearHistory(sessionID)
 	}
 

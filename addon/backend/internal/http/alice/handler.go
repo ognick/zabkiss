@@ -72,8 +72,11 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.log.Info("webhook request", "session", req.Session.SessionID, "utterance", req.Request.OriginalUtterance)
+
 	user, err := h.resolveAuth(r.Context(), req)
 	if err != nil {
+		h.log.Warn("auth failed", "session", req.Session.SessionID, "err", err)
 		if errors.Is(err, errForbidden) {
 			msg := fmt.Sprintf("%s, %s", user.Name, errForbidden.Error())
 			h.write(w, aliceResponse{
@@ -107,6 +110,8 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	h.log.Info("auth ok", "session", req.Session.SessionID, "user", user.Name, "email", user.Email)
 
 	result, err := h.svc.Process(ctx, req.Session.SessionID, req.Request.Command)
 	if err != nil {

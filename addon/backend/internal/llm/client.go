@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/ognick/zabkiss/internal/domain"
+	"github.com/ognick/zabkiss/pkg/logger"
 )
 
 // Client отправляет запрос в LLM и возвращает структурированный ответ.
@@ -19,10 +20,11 @@ type openAIClient struct {
 	baseURL string
 	apiKey  string
 	model   string
+	log     logger.Logger
 }
 
-func NewClient(baseURL, apiKey, model string) Client {
-	return &openAIClient{baseURL: baseURL, apiKey: apiKey, model: model}
+func NewClient(baseURL, apiKey, model string, log logger.Logger) Client {
+	return &openAIClient{baseURL: baseURL, apiKey: apiKey, model: model, log: log}
 }
 
 type chatRequest struct {
@@ -81,6 +83,14 @@ func (c *openAIClient) Execute(ctx context.Context, command string, devices []do
 		return domain.CommandResult{}, fmt.Errorf("marshal request: %w", err)
 	}
 
+	c.log.Debug("llm request",
+		"model", c.model,
+		"command", command,
+		"devices", len(devices),
+		"history_len", len(history),
+		"system_prompt_len", len(systemPrompt),
+	)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(data))
 	if err != nil {
 		return domain.CommandResult{}, fmt.Errorf("build request: %w", err)
@@ -95,6 +105,7 @@ func (c *openAIClient) Execute(ctx context.Context, command string, devices []do
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
+		c.log.Error("llm http error", "status", resp.StatusCode, "model", c.model, "url", c.baseURL)
 		return domain.CommandResult{}, fmt.Errorf("llm returned %d", resp.StatusCode)
 	}
 
@@ -106,10 +117,16 @@ func (c *openAIClient) Execute(ctx context.Context, command string, devices []do
 		return domain.CommandResult{}, fmt.Errorf("empty choices in llm response")
 	}
 
+	rawContent := chatResp.Choices[0].Message.Content
+	c.log.Debug("llm raw response", "content", rawContent)
+
 	var raw llmResponse
-	if err := json.Unmarshal([]byte(chatResp.Choices[0].Message.Content), &raw); err != nil {
+	if err := json.Unmarshal([]byte(rawContent), &raw); err != nil {
+		c.log.Error("llm parse error", "err", err, "raw", rawContent)
 		return domain.CommandResult{}, fmt.Errorf("parse llm json: %w", err)
 	}
+
+	c.log.Info("llm result", "status", raw.Status, "reply", raw.Reply, "actions", len(raw.Actions))
 
 	actions := make([]domain.Action, len(raw.Actions))
 	for i, a := range raw.Actions {

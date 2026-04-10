@@ -60,7 +60,7 @@ func main() {
 		log,
 	)
 	haClient := ha.NewClient(cfg.HAURL, cfg.HAToken)
-	llmClient := llm.NewClient(cfg.LLMBaseURL, cfg.OpenAIAPIKey, cfg.LLMModel)
+	llmClient := llm.NewClient(cfg.LLMBaseURL, cfg.OpenAIAPIKey, cfg.LLMModel, log)
 	svc := service.New(haClient, llmClient, policyClient, log)
 
 	alice.New(svc, alice.NewAuth(userRepo, cfg.AllowedEmails), log).Register(r)
