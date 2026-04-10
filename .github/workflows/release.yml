@@ -25,8 +25,8 @@ jobs:
 
       - name: Create and push tag
         run: |
-          git tag "v${{ steps.version.outputs.version }}"
-          git push origin "v${{ steps.version.outputs.version }}"
+          git tag "v${{ steps.version.outputs.version }}" || true
+          git push origin "v${{ steps.version.outputs.version }}" || true
 
   build:
     name: Build ${{ matrix.arch }}
