@@ -26,6 +26,13 @@ func NewAuth(userRepo repository.UserRepo) *YandexAuth {
 	return &YandexAuth{userRepo: userRepo, httpClient: http.DefaultClient}
 }
 
+// WithHTTPClient replaces the HTTP client used for Yandex API calls.
+// Intended for testing: points requests at a mock server instead of login.yandex.ru.
+func (a *YandexAuth) WithHTTPClient(client *http.Client) *YandexAuth {
+	a.httpClient = client
+	return a
+}
+
 func (a *YandexAuth) ResolveUser(ctx context.Context, token string) (domain.User, error) {
 	existing, err := a.userRepo.GetByToken(ctx, token)
 	if err != nil {

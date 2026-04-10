@@ -104,9 +104,6 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) isAllowed(email string) bool {
-	if len(h.allowedEmails) == 0 {
-		return true
-	}
 	for _, e := range h.allowedEmails {
 		if e == email {
 			return true

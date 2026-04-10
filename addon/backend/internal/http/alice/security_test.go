@@ -113,16 +113,16 @@ func TestSecurity_IsAllowed(t *testing.T) {
 		wantAllowed   bool
 	}{
 		{
-			name:          "nil allowlist allows all",
+			name:          "nil allowlist blocks all",
 			allowedEmails: nil,
 			email:         "anyone@evil.com",
-			wantAllowed:   true,
+			wantAllowed:   false,
 		},
 		{
-			name:          "empty allowlist allows all",
+			name:          "empty allowlist blocks all",
 			allowedEmails: []string{},
 			email:         "anyone@evil.com",
-			wantAllowed:   true,
+			wantAllowed:   false,
 		},
 		{
 			name:          "email in list",
