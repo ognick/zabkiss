@@ -266,7 +266,8 @@ func (s *SmartHomeService) executeActions(ctx context.Context, actions []domain.
 	return results
 }
 
-// executeYouTubeAction ищет видео по запросу и запускает его через media_player.play_media (Cast).
+// executeYouTubeAction ищет видео по запросу и запускает его через media_player.play_media.
+// Использует media_content_type=url — работает и для androidtv_remote, и для Cast.
 func (s *SmartHomeService) executeYouTubeAction(ctx context.Context, action domain.Action) error {
 	query, _ := action.Data["query"].(string)
 	if query == "" {
@@ -278,10 +279,10 @@ func (s *SmartHomeService) executeYouTubeAction(ctx context.Context, action doma
 	}
 	s.log.Info("youtube search result", "query", query, "video_id", video.VideoID, "title", video.Title)
 
-	mediaID := fmt.Sprintf(`{"app_name":"youtube","media_id":"%s"}`, video.VideoID)
+	videoURL := fmt.Sprintf("https://www.youtube.com/watch?v=%s", video.VideoID)
 	return s.ha.CallService(ctx, action.TargetID, "media_player.play_media", map[string]any{
-		"media_content_type": "cast",
-		"media_content_id":   mediaID,
+		"media_content_type": "url",
+		"media_content_id":   videoURL,
 	})
 }
 
