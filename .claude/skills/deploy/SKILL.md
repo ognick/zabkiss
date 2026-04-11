@@ -1,8 +1,8 @@
 ---
 name: deploy
 description: Bump patch version in addon/config.yaml, commit, push, wait for CI build, then update zabkiss addon on Home Assistant
-user-invocable: true
-allowed-tools: Bash(git *), Bash(gh *), Bash(ssh *), Read, Edit
+disable-model-invocation: true
+tools: Bash, Read, Edit
 ---
 
 Выполни деплой аддона zabkiss на Home Assistant. Шаги строго по порядку, без пропусков.
