@@ -97,7 +97,7 @@ func (s *serviceStub) Process(_ context.Context, _, _ string) (domain.CommandRes
 	if s.err != nil {
 		return domain.CommandResult{}, s.err
 	}
-	return domain.CommandResult{Status: domain.CommandOK, Reply: s.reply}, nil
+	return domain.CommandResult{Status: domain.CommandOK, Reply: s.reply, EndSession: true}, nil
 }
 
 // panicServiceStub simulates a catastrophic failure in the service layer.

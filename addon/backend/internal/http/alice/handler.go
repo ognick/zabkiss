@@ -119,7 +119,7 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 			msg := fmt.Sprintf("%s, не успел обработать запрос, попробуйте ещё раз", user.Name)
 			h.write(w, aliceResponse{
 				Version:  version,
-				Response: responseBody{Text: msg, TTS: msg, EndSession: false},
+				Response: responseBody{Text: msg, TTS: msg, EndSession: true},
 			})
 			return
 		}

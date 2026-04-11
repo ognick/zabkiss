@@ -38,7 +38,7 @@ func TestWebhook_Unauthenticated_ReturnsAccountLinking(t *testing.T) {
 
 func TestWebhook_Success_EndsSession(t *testing.T) {
 	user := &domain.User{ID: "u1", Name: "Иван", Email: "ivan@home.ru", Token: "tok"}
-	svc := &mockService{result: domain.CommandResult{Status: domain.CommandOK, Reply: "включаю свет"}}
+	svc := &mockService{result: domain.CommandResult{Status: domain.CommandOK, Reply: "включаю свет", EndSession: true}}
 	h := &Handler{log: &mockLogger{}, svc: svc, auth: &mockAuth{user: user}}
 
 	body := `{"session":{"session_id":"s1","message_id":1,"user":{"user_id":"u1","access_token":"tok"}},"request":{"command":"включи свет"}}`
