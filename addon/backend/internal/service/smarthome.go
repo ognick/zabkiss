@@ -107,11 +107,18 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, comma
 			actionCtx, cancel := context.WithTimeout(context.Background(), haActionTimeout)
 			defer cancel()
 			actionResults := s.executeActions(actionCtx, result.Actions)
+			if allFailed(actionResults) {
+				result.Reply = "Не удалось выполнить команду — устройство не ответило или недоступно"
+			}
 			msgs = append(msgs, domain.ChatMessage{
 				Role:    "user",
 				Content: formatActionResults(actionResults),
 			})
 		}
+	}
+
+	if result.Status == domain.CommandReject {
+		s.log.Warn("command rejected", "session", sessionID, "reply", result.Reply)
 	}
 
 	if !result.EndSession {
@@ -133,12 +140,6 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, comma
 		} else {
 			s.log.Info("facts forgotten", "user", userID, "count", len(result.Forget))
 		}
-	}
-
-	if result.Status == domain.CommandOK {
-		s.dispatchActions(result.Actions)
-	} else if result.Status == domain.CommandReject {
-		s.log.Warn("command rejected", "session", sessionID, "reply", result.Reply)
 	}
 
 	return result, nil
@@ -175,6 +176,19 @@ func (s *SmartHomeService) dispatchActions(actions []domain.Action) {
 		defer cancel()
 		s.executeActions(ctx, snapshot)
 	}()
+}
+
+// allFailed возвращает true если все действия завершились с ошибкой.
+func allFailed(results []actionResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	for _, r := range results {
+		if r.Err == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // formatActionResults формирует сообщение для истории диалога с результатами действий.

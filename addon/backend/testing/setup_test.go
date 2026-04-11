@@ -187,10 +187,12 @@ type testLogger struct{ t *testing.T }
 
 func newTestLogger(t *testing.T) logger.Logger { return &testLogger{t: t} }
 
-func (l *testLogger) Info(msg string, args ...any)  { l.t.Logf("INFO  %s %v", msg, args) }
-func (l *testLogger) Error(msg string, args ...any) { l.t.Logf("ERROR %s %v", msg, args) }
-func (l *testLogger) Debug(msg string, args ...any) {}
-func (l *testLogger) Warn(msg string, args ...any)  { l.t.Logf("WARN  %s %v", msg, args) }
+func (l *testLogger) Info(msg string, args ...any)       { l.t.Logf("INFO  %s %v", msg, args) }
+func (l *testLogger) Error(msg string, args ...any)      { l.t.Logf("ERROR %s %v", msg, args) }
+func (l *testLogger) Debug(msg string, args ...any)      {}
+func (l *testLogger) Warn(msg string, args ...any)       { l.t.Logf("WARN  %s %v", msg, args) }
+func (l *testLogger) Infof(format string, args ...any)   { l.t.Logf("INFO  "+format, args...) }
+func (l *testLogger) Errorf(format string, args ...any)  { l.t.Logf("ERROR "+format, args...) }
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 

@@ -18,6 +18,8 @@ type mockLogger struct {
 func (m *mockLogger) Info(msg string, args ...any)  {}
 func (m *mockLogger) Debug(msg string, args ...any) {}
 func (m *mockLogger) Warn(msg string, args ...any)  {}
+func (m *mockLogger) Infof(format string, args ...any)  {}
+func (m *mockLogger) Errorf(format string, args ...any) {}
 func (m *mockLogger) Error(msg string, args ...any) {
 	m.logged = append(m.logged, logEntry{msg: msg, args: args})
 }

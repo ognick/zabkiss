@@ -24,7 +24,7 @@ var (
 
 // requestBudget — сколько времени до истечения Alice-таймаута мы резервируем
 // на отправку ответа с учётом сетевой задержки и JSON-кодирования.
-const requestBudget = 500 * time.Millisecond
+const requestBudget = 800 * time.Millisecond
 
 type commandService interface {
 	Process(ctx context.Context, sessionID, userID, command string) (domain.CommandResult, error)

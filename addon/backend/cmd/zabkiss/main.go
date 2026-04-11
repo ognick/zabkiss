@@ -25,7 +25,12 @@ import (
 	"github.com/ognick/zabkiss/pkg/sqlitedb"
 )
 
+// version задаётся при сборке через -ldflags "-X main.version=x.y.z".
+var version = "dev"
+
 func main() {
+	startedAt := time.Now().Format(time.RFC3339)
+
 	cfg := config.Load()
 
 	level := slog.LevelInfo
@@ -33,7 +38,7 @@ func main() {
 		level = slog.LevelInfo
 	}
 	slogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	log := logger.NewSlogAdapter(slogger)
+	log := logger.With(logger.NewSlogAdapter(slogger), "version", version, "started_at", startedAt)
 
 	db, err := sqlitedb.New(cfg.DBPath)
 	if err != nil {

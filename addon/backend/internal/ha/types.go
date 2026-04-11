@@ -36,8 +36,25 @@ type param struct {
 	Values []string
 }
 
+// unavailableStates — состояния HA при которых устройство не принимает команды.
+var unavailableStates = map[string]bool{
+	"unavailable": true,
+	"unknown":     true,
+}
+
 // toDevice маппит внутренние DTO в доменную модель Device.
 func toDevice(s entityState, svcs []applicableService) domain.Device {
+	// Недоступные устройства не получают список сервисов — HA вернёт 500 на любую команду,
+	// а без сервисов LLM сам ответит пользователю что устройство недоступно.
+	if unavailableStates[s.State] {
+		return domain.Device{
+			EntityID:     s.EntityID,
+			FriendlyName: s.FriendlyName,
+			State:        s.State,
+			Attributes:   s.Attributes,
+		}
+	}
+
 	domSvcs := make([]domain.DeviceService, len(svcs))
 	for i, svc := range svcs {
 		domParams := make(map[string]domain.DeviceParam, len(svc.Params))

@@ -10,10 +10,12 @@ type mockLogger struct {
 	errors []string
 }
 
-func (m *mockLogger) Info(msg string, args ...any)  {}
-func (m *mockLogger) Error(msg string, args ...any) { m.errors = append(m.errors, msg) }
-func (m *mockLogger) Debug(msg string, args ...any) {}
-func (m *mockLogger) Warn(msg string, args ...any)  {}
+func (m *mockLogger) Info(msg string, args ...any)      {}
+func (m *mockLogger) Error(msg string, args ...any)     { m.errors = append(m.errors, msg) }
+func (m *mockLogger) Debug(msg string, args ...any)     {}
+func (m *mockLogger) Warn(msg string, args ...any)      {}
+func (m *mockLogger) Infof(format string, args ...any)  {}
+func (m *mockLogger) Errorf(format string, args ...any) { m.errors = append(m.errors, format) }
 
 func TestRecoveryMiddleware_NoPanic(t *testing.T) {
 	log := &mockLogger{}
