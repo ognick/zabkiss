@@ -83,21 +83,21 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, command strin
 	}
 	s.log.Info("llm response", "status", result.Status, "reply", result.Reply, "actions", len(result.Actions))
 
-	switch result.Status {
-	case domain.CommandOK:
-		s.clearHistory(sessionID)
-		s.dispatchActions(result.Actions)
-
-	case domain.CommandClarify:
+	// Всегда обновляем историю диалога, если сессия продолжается.
+	if !result.EndSession {
 		updated := append(history,
 			domain.ChatMessage{Role: "user", Content: command},
 			domain.ChatMessage{Role: "assistant", Content: result.Reply},
 		)
 		s.setHistory(sessionID, updated)
-
-	default: // CommandReject
-		s.log.Warn("command rejected", "session", sessionID, "reply", result.Reply)
+	} else {
 		s.clearHistory(sessionID)
+	}
+
+	if result.Status == domain.CommandOK {
+		s.dispatchActions(result.Actions)
+	} else if result.Status == domain.CommandReject {
+		s.log.Warn("command rejected", "session", sessionID, "reply", result.Reply)
 	}
 
 	return result, nil

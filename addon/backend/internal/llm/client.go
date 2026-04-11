@@ -50,10 +50,11 @@ type chatResponse struct {
 
 // llmResponse — внутренний DTO для парсинга ответа LLM.
 type llmResponse struct {
-	Status  string          `json:"status"`
-	Reply   string          `json:"reply"`
-	Reason  string          `json:"reason"`
-	Actions []llmAction     `json:"actions"`
+	Status     string      `json:"status"`
+	Reply      string      `json:"reply"`
+	Reason     string      `json:"reason"`
+	Actions    []llmAction `json:"actions"`
+	EndSession bool        `json:"end_session"`
 }
 
 type llmAction struct {
@@ -88,8 +89,8 @@ func (c *openAIClient) Execute(ctx context.Context, command string, devices []do
 		"command", command,
 		"devices", len(devices),
 		"history_len", len(history),
-		"system_prompt_len", len(systemPrompt),
 	)
+	c.log.Debug("llm system prompt", "prompt", systemPrompt)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(data))
 	if err != nil {
@@ -138,8 +139,9 @@ func (c *openAIClient) Execute(ctx context.Context, command string, devices []do
 	}
 
 	return domain.CommandResult{
-		Status:  domain.CommandStatus(raw.Status),
-		Reply:   raw.Reply,
-		Actions: actions,
+		Status:     domain.CommandStatus(raw.Status),
+		Reply:      raw.Reply,
+		Actions:    actions,
+		EndSession: raw.EndSession,
 	}, nil
 }

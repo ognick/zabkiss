@@ -24,7 +24,8 @@ type Action struct {
 
 // CommandResult — результат выполнения голосовой команды.
 type CommandResult struct {
-	Status  CommandStatus
-	Reply   string   // что произносится вслух
-	Actions []Action // действия для HA (пусто при reject/clarify)
+	Status     CommandStatus
+	Reply      string   // что произносится вслух
+	Actions    []Action // действия для HA (пусто при reject/clarify)
+	EndSession bool     // завершить ли сессию Алисы
 }

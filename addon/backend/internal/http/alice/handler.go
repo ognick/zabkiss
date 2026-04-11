@@ -24,7 +24,7 @@ var (
 
 // requestBudget — сколько времени до истечения Alice-таймаута мы резервируем
 // на отправку ответа с учётом сетевой задержки и JSON-кодирования.
-const requestBudget = 1500 * time.Millisecond
+const requestBudget = 500 * time.Millisecond
 
 type commandService interface {
 	Process(ctx context.Context, sessionID, command string) (domain.CommandResult, error)
@@ -119,7 +119,7 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 			msg := fmt.Sprintf("%s, не успел обработать запрос, попробуйте ещё раз", user.Name)
 			h.write(w, aliceResponse{
 				Version:  version,
-				Response: responseBody{Text: msg, TTS: msg, EndSession: true},
+				Response: responseBody{Text: msg, TTS: msg, EndSession: false},
 			})
 			return
 		}
@@ -129,10 +129,9 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	text := result.Reply
-	endSession := result.Status != domain.CommandClarify
 	h.write(w, aliceResponse{
 		Version:  version,
-		Response: responseBody{Text: text, TTS: text, EndSession: endSession},
+		Response: responseBody{Text: text, TTS: text, EndSession: result.EndSession},
 	})
 }
 
