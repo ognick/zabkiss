@@ -116,7 +116,7 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 	result, err := h.svc.Process(ctx, req.Session.SessionID, user.ID, req.Request.Command)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			msg := fmt.Sprintf("%s, не успел обработать запрос, попробуйте ещё раз", user.Name)
+			const msg = "не успел обработать запрос, попробуйте ещё раз"
 			h.write(w, aliceResponse{
 				Version:  version,
 				Response: responseBody{Text: msg, TTS: msg, EndSession: true},

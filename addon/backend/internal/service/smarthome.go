@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -11,11 +12,15 @@ import (
 	"github.com/ognick/zabkiss/pkg/logger"
 )
 
-// haBGTimeout — таймаут для фоновых вызовов Home Assistant при завершении сессии.
-const haBGTimeout = 15 * time.Second
-
-// haActionTimeout — таймаут на выполнение действий внутри активной сессии.
-const haActionTimeout = 10 * time.Second
+const (
+	// haBGTimeout — таймаут для фоновых вызовов HA при завершении сессии.
+	haBGTimeout = 15 * time.Second
+	// haActionTimeout — таймаут на выполнение действий в активной сессии.
+	haActionTimeout = 10 * time.Second
+	// llmBGTimeout — таймаут для LLM-горутины; больше Alice-дедлайна,
+	// чтобы LLM мог завершиться даже после таймаута Alice.
+	llmBGTimeout = 30 * time.Second
+)
 
 type haGateway interface {
 	GetDeviceInfos(ctx context.Context, entityIDs []string) ([]domain.Device, error)
@@ -36,6 +41,12 @@ type memoryGateway interface {
 	ForgetFacts(ctx context.Context, userID string, factIDs []string) error
 }
 
+// historyEntry — группа сообщений с меткой времени запроса для сортировки.
+type historyEntry struct {
+	requestTime time.Time
+	msgs        []domain.ChatMessage
+}
+
 // SmartHomeService оркестрирует выполнение голосовых команд умного дома.
 type SmartHomeService struct {
 	ha         haGateway
@@ -45,7 +56,7 @@ type SmartHomeService struct {
 	log        logger.Logger
 
 	sessionMu      sync.Mutex
-	sessionHistory map[string][]domain.ChatMessage
+	sessionHistory map[string][]historyEntry
 }
 
 func New(ha haGateway, llm llmGateway, policy policyGateway, memoryRepo memoryGateway, log logger.Logger) *SmartHomeService {
@@ -55,12 +66,26 @@ func New(ha haGateway, llm llmGateway, policy policyGateway, memoryRepo memoryGa
 		policy:         policy,
 		memoryRepo:     memoryRepo,
 		log:            log,
-		sessionHistory: make(map[string][]domain.ChatMessage),
+		sessionHistory: make(map[string][]historyEntry),
 	}
 }
 
+type llmResult struct {
+	res domain.CommandResult
+	err error
+}
+
 // Process выполняет голосовую команду пользователя в рамках сессии.
+//
+// LLM запускается в отдельной горутине с собственным фоновым контекстом
+// (llmBGTimeout), независимым от Alice-дедлайна. Если LLM вернул ответ
+// до дедлайна — результат возвращается немедленно, постобработка (HA-действия,
+// память, история) идёт в фоне. Если дедлайн Alice истёк раньше — Process
+// возвращает ошибку, LLM-горутина продолжает работу и по завершении сохраняет
+// результат в историю с временной меткой исходного запроса.
 func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, command string) (domain.CommandResult, error) {
+	requestTime := time.Now()
+
 	s.log.Info("process command", "session", sessionID, "user", userID, "command", command)
 
 	entities, err := s.policy.GetEntities(ctx)
@@ -87,63 +112,102 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, comma
 	history := s.getHistory(sessionID)
 	s.log.Debug("session history", "session", sessionID, "messages", len(history))
 
-	result, err := s.llm.Execute(ctx, command, devices, history, memFacts)
-	if err != nil {
-		s.log.Error("llm execute failed", "err", err)
-		return domain.CommandResult{}, err
-	}
-	s.log.Info("llm response", "status", result.Status, "reply", result.Reply, "actions", len(result.Actions), "remember", len(result.Remember), "forget", len(result.Forget))
+	// LLM запускается с фоновым контекстом, независимым от Alice-дедлайна.
+	llmCtx, llmCancel := context.WithTimeout(context.Background(), llmBGTimeout)
+	ch := make(chan llmResult, 1)
+	go func() {
+		defer llmCancel()
+		res, err := s.llm.Execute(llmCtx, command, devices, history, memFacts)
+		ch <- llmResult{res, err}
+	}()
 
-	msgs := append(history,
-		domain.ChatMessage{Role: "user", Content: command},
-		domain.ChatMessage{Role: "assistant", Content: result.Reply},
-	)
+	select {
+	case lr := <-ch:
+		// LLM ответил до дедлайна Alice.
+		if lr.err != nil {
+			s.log.Error("llm execute failed", "err", lr.err)
+			return domain.CommandResult{}, lr.err
+		}
+		result := lr.res
+		s.log.Info("llm response", "status", result.Status, "reply", result.Reply,
+			"actions", len(result.Actions), "remember", len(result.Remember), "forget", len(result.Forget))
+
+		// Сразу пишем основные сообщения в историю — без ожидания HA-действий.
+		if !result.EndSession {
+			s.appendHistory(sessionID, requestTime, []domain.ChatMessage{
+				{Role: "user", Content: command},
+				{Role: "assistant", Content: result.Reply},
+			})
+		}
+
+		// Постобработка (HA-действия, результаты, память) — в фоне, не задерживает ответ.
+		go s.postProcess(sessionID, userID, requestTime, result)
+
+		return result, nil
+
+	case <-ctx.Done():
+		// Alice-дедлайн истёк раньше LLM. Возвращаем ошибку немедленно.
+		// LLM-горутина продолжает работу и сохранит результат в историю.
+		go func() {
+			lr := <-ch
+			if lr.err == nil {
+				s.log.Info("llm completed after deadline", "session", sessionID)
+				if !lr.res.EndSession {
+					s.appendHistory(sessionID, requestTime, []domain.ChatMessage{
+						{Role: "user", Content: command},
+						{Role: "assistant", Content: lr.res.Reply},
+					})
+				}
+				s.postProcess(sessionID, userID, requestTime, lr.res)
+			}
+		}()
+		return domain.CommandResult{}, ctx.Err()
+	}
+}
+
+// postProcess выполняет HA-действия, добавляет их результаты в историю
+// и обновляет долгосрочную память. Запускается в отдельной горутине.
+func (s *SmartHomeService) postProcess(sessionID, userID string, requestTime time.Time, result domain.CommandResult) {
+	if result.Status == domain.CommandReject {
+		s.log.Warn("command rejected", "session", sessionID, "reply", result.Reply)
+	}
 
 	if result.Status == domain.CommandOK && len(result.Actions) > 0 {
 		if result.EndSession {
-			// Сессия завершается — результаты истории не нужны, запускаем фоново.
 			s.dispatchActions(result.Actions)
 		} else {
 			actionCtx, cancel := context.WithTimeout(context.Background(), haActionTimeout)
 			defer cancel()
 			actionResults := s.executeActions(actionCtx, result.Actions)
-			if allFailed(actionResults) {
-				result.Reply = "Не удалось выполнить команду — устройство не ответило или недоступно"
-			}
-			msgs = append(msgs, domain.ChatMessage{
-				Role:    "user",
-				Content: formatActionResults(actionResults),
+			// Результаты действий кладём после основных сообщений (+1ns гарантирует порядок).
+			s.appendHistory(sessionID, requestTime.Add(time.Nanosecond), []domain.ChatMessage{
+				{Role: "user", Content: formatActionResults(actionResults)},
 			})
 		}
 	}
 
-	if result.Status == domain.CommandReject {
-		s.log.Warn("command rejected", "session", sessionID, "reply", result.Reply)
-	}
-
-	if !result.EndSession {
-		s.setHistory(sessionID, msgs)
-	} else {
+	if result.EndSession {
 		s.clearHistory(sessionID)
 	}
 
+	bg := context.Background()
 	if len(result.Remember) > 0 {
-		if err := s.memoryRepo.AddFacts(ctx, userID, result.Remember); err != nil {
+		if err := s.memoryRepo.AddFacts(bg, userID, result.Remember); err != nil {
 			s.log.Warn("add facts failed", "user", userID, "err", err)
 		} else {
 			s.log.Info("facts remembered", "user", userID, "count", len(result.Remember))
 		}
 	}
 	if len(result.Forget) > 0 {
-		if err := s.memoryRepo.ForgetFacts(ctx, userID, result.Forget); err != nil {
+		if err := s.memoryRepo.ForgetFacts(bg, userID, result.Forget); err != nil {
 			s.log.Warn("forget facts failed", "user", userID, "err", err)
 		} else {
 			s.log.Info("facts forgotten", "user", userID, "count", len(result.Forget))
 		}
 	}
-
-	return result, nil
 }
+
+// ── HA actions ────────────────────────────────────────────────────────────────
 
 type actionResult struct {
 	TargetID string
@@ -151,7 +215,6 @@ type actionResult struct {
 	Err      error
 }
 
-// executeActions выполняет действия синхронно и возвращает результаты.
 func (s *SmartHomeService) executeActions(ctx context.Context, actions []domain.Action) []actionResult {
 	results := make([]actionResult, len(actions))
 	for i, action := range actions {
@@ -164,7 +227,7 @@ func (s *SmartHomeService) executeActions(ctx context.Context, actions []domain.
 	return results
 }
 
-// dispatchActions запускает фоновую горутину (используется при EndSession=true).
+// dispatchActions запускает фоновую горутину (для EndSession=true, где история не нужна).
 func (s *SmartHomeService) dispatchActions(actions []domain.Action) {
 	if len(actions) == 0 {
 		return
@@ -178,20 +241,6 @@ func (s *SmartHomeService) dispatchActions(actions []domain.Action) {
 	}()
 }
 
-// allFailed возвращает true если все действия завершились с ошибкой.
-func allFailed(results []actionResult) bool {
-	if len(results) == 0 {
-		return false
-	}
-	for _, r := range results {
-		if r.Err == nil {
-			return false
-		}
-	}
-	return true
-}
-
-// formatActionResults формирует сообщение для истории диалога с результатами действий.
 func formatActionResults(results []actionResult) string {
 	var sb strings.Builder
 	sb.WriteString("[Результаты выполненных действий]\n")
@@ -207,22 +256,33 @@ func formatActionResults(results []actionResult) string {
 
 // ── session history ───────────────────────────────────────────────────────────
 
+// appendHistory добавляет группу сообщений с меткой requestTime и сортирует историю.
+func (s *SmartHomeService) appendHistory(sessionID string, requestTime time.Time, msgs []domain.ChatMessage) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	entries := append(s.sessionHistory[sessionID], historyEntry{
+		requestTime: requestTime,
+		msgs:        msgs,
+	})
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].requestTime.Before(entries[j].requestTime)
+	})
+	s.sessionHistory[sessionID] = entries
+}
+
+// getHistory возвращает все сообщения сессии, отсортированные по времени запроса.
 func (s *SmartHomeService) getHistory(sessionID string) []domain.ChatMessage {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
-	h := s.sessionHistory[sessionID]
-	if len(h) == 0 {
+	entries := s.sessionHistory[sessionID]
+	if len(entries) == 0 {
 		return nil
 	}
-	cp := make([]domain.ChatMessage, len(h))
-	copy(cp, h)
-	return cp
-}
-
-func (s *SmartHomeService) setHistory(sessionID string, history []domain.ChatMessage) {
-	s.sessionMu.Lock()
-	defer s.sessionMu.Unlock()
-	s.sessionHistory[sessionID] = history
+	var all []domain.ChatMessage
+	for _, e := range entries {
+		all = append(all, e.msgs...)
+	}
+	return all
 }
 
 func (s *SmartHomeService) clearHistory(sessionID string) {
