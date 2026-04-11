@@ -12,12 +12,8 @@ import (
 	"github.com/ognick/zabkiss/pkg/logger"
 )
 
-const (
-	// haBGTimeout — таймаут для фоновых вызовов HA при завершении сессии.
-	haBGTimeout = 15 * time.Second
-	// haActionTimeout — таймаут на выполнение действий в активной сессии.
-	haActionTimeout = 10 * time.Second
-)
+// haActionTimeout — таймаут на выполнение HA-действий.
+const haActionTimeout = 10 * time.Second
 
 type haGateway interface {
 	GetDeviceInfos(ctx context.Context, entityIDs []string) ([]domain.Device, error)
@@ -112,6 +108,22 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, comma
 	s.log.Info("llm response", "status", result.Status, "reply", result.Reply,
 		"actions", len(result.Actions), "remember", len(result.Remember), "forget", len(result.Forget))
 
+	// Память обновляем синхронно — влияет на следующий запрос.
+	if len(result.Remember) > 0 {
+		if err := s.memoryRepo.AddFacts(ctx, userID, result.Remember); err != nil {
+			s.log.Warn("add facts failed", "user", userID, "err", err)
+		} else {
+			s.log.Info("facts remembered", "user", userID, "count", len(result.Remember))
+		}
+	}
+	if len(result.Forget) > 0 {
+		if err := s.memoryRepo.ForgetFacts(ctx, userID, result.Forget); err != nil {
+			s.log.Warn("forget facts failed", "user", userID, "err", err)
+		} else {
+			s.log.Info("facts forgotten", "user", userID, "count", len(result.Forget))
+		}
+	}
+
 	// Сразу пишем основные сообщения в историю — без ожидания HA-действий.
 	if !result.EndSession {
 		s.appendHistory(sessionID, requestTime, []domain.ChatMessage{
@@ -120,52 +132,25 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, comma
 		})
 	}
 
-	// Постобработка (HA-действия, результаты, память) — в фоне, не задерживает ответ.
-	go s.postProcess(sessionID, userID, requestTime, result)
+	// HA-действия и их результаты в историю — в фоне, не задерживает ответ.
+	go s.postProcess(sessionID, requestTime, result)
 
 	return result, nil
 }
 
-// postProcess выполняет HA-действия, добавляет их результаты в историю
-// и обновляет долгосрочную память. Запускается в отдельной горутине.
-func (s *SmartHomeService) postProcess(sessionID, userID string, requestTime time.Time, result domain.CommandResult) {
-	if result.Status == domain.CommandReject {
-		s.log.Warn("command rejected", "session", sessionID, "reply", result.Reply)
+// postProcess выполняет HA-действия и добавляет их результаты в историю.
+// Запускается в отдельной горутине.
+func (s *SmartHomeService) postProcess(sessionID string, requestTime time.Time, result domain.CommandResult) {
+	if result.Status != domain.CommandOK || len(result.Actions) == 0 {
+		return
 	}
-
-	if result.Status == domain.CommandOK && len(result.Actions) > 0 {
-		if result.EndSession {
-			s.dispatchActions(result.Actions)
-		} else {
-			actionCtx, cancel := context.WithTimeout(context.Background(), haActionTimeout)
-			defer cancel()
-			actionResults := s.executeActions(actionCtx, result.Actions)
-			// Результаты действий кладём после основных сообщений (+1ns гарантирует порядок).
-			s.appendHistory(sessionID, requestTime.Add(time.Nanosecond), []domain.ChatMessage{
-				{Role: "user", Content: formatActionResults(actionResults)},
-			})
-		}
-	}
-
-	if result.EndSession {
-		s.clearHistory(sessionID)
-	}
-
-	bg := context.Background()
-	if len(result.Remember) > 0 {
-		if err := s.memoryRepo.AddFacts(bg, userID, result.Remember); err != nil {
-			s.log.Warn("add facts failed", "user", userID, "err", err)
-		} else {
-			s.log.Info("facts remembered", "user", userID, "count", len(result.Remember))
-		}
-	}
-	if len(result.Forget) > 0 {
-		if err := s.memoryRepo.ForgetFacts(bg, userID, result.Forget); err != nil {
-			s.log.Warn("forget facts failed", "user", userID, "err", err)
-		} else {
-			s.log.Info("facts forgotten", "user", userID, "count", len(result.Forget))
-		}
-	}
+	actionCtx, cancel := context.WithTimeout(context.Background(), haActionTimeout)
+	defer cancel()
+	actionResults := s.executeActions(actionCtx, result.Actions)
+	// Результаты кладём после основных сообщений (+1ns гарантирует порядок).
+	s.appendHistory(sessionID, requestTime.Add(time.Nanosecond), []domain.ChatMessage{
+		{Role: "user", Content: formatActionResults(actionResults)},
+	})
 }
 
 // ── HA actions ────────────────────────────────────────────────────────────────
@@ -188,19 +173,6 @@ func (s *SmartHomeService) executeActions(ctx context.Context, actions []domain.
 	return results
 }
 
-// dispatchActions запускает фоновую горутину (для EndSession=true, где история не нужна).
-func (s *SmartHomeService) dispatchActions(actions []domain.Action) {
-	if len(actions) == 0 {
-		return
-	}
-	snapshot := make([]domain.Action, len(actions))
-	copy(snapshot, actions)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), haBGTimeout)
-		defer cancel()
-		s.executeActions(ctx, snapshot)
-	}()
-}
 
 func formatActionResults(results []actionResult) string {
 	var sb strings.Builder
