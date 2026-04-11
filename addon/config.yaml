@@ -1,6 +1,6 @@
 name: "ZabKiss"
 description: "Natural language smart home control via Alice voice assistant"
-version: "0.2.10"
+version: "0.2.11"
 slug: "zabkiss"
 init: false
 arch:
@@ -21,6 +21,7 @@ options:
   ha_token: ""
   ha_url: "http://homeassistant:8123"
   policy_cache_ttl_seconds: 10
+  youtube_api_key: ""
 schema:
   log_level: list(debug|info|warn|error)
   openai_api_key: str
@@ -30,3 +31,4 @@ schema:
   ha_token: str
   ha_url: str
   policy_cache_ttl_seconds: int
+  youtube_api_key: str?

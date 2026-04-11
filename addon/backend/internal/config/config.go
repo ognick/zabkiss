@@ -19,6 +19,7 @@ type Config struct {
 	HAToken               string
 	HAURL                 string
 	PolicyCacheTTLSeconds int
+	YouTubeAPIKey         string
 }
 
 func Load() *Config {
@@ -34,6 +35,7 @@ func Load() *Config {
 		HAToken:               getEnv("HA_TOKEN", ""),
 		HAURL:                 getEnv("HA_URL", "http://homeassistant:8123"),
 		PolicyCacheTTLSeconds: parseInt(getEnv("POLICY_CACHE_TTL_SECONDS", "10")),
+		YouTubeAPIKey:         getEnv("YOUTUBE_API_KEY", ""),
 	}
 }
 

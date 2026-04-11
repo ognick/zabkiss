@@ -23,6 +23,7 @@ import (
 	"github.com/ognick/zabkiss/pkg/httpserver"
 	"github.com/ognick/zabkiss/pkg/logger"
 	"github.com/ognick/zabkiss/pkg/sqlitedb"
+	"github.com/ognick/zabkiss/pkg/youtube"
 )
 
 // version задаётся при сборке через -ldflags "-X main.version=x.y.z".
@@ -71,7 +72,14 @@ func main() {
 	)
 	haClient := ha.NewClient(cfg.HAURL, cfg.HAToken)
 	llmClient := llm.NewClient(cfg.LLMBaseURL, cfg.OpenAIAPIKey, cfg.LLMModel, log)
-	svc := service.New(haClient, llmClient, policyClient, memoryRepo, log)
+
+	var ytClient service.YouTubeGateway
+	if cfg.YouTubeAPIKey != "" {
+		ytClient = youtube.NewClient(cfg.YouTubeAPIKey)
+		log.Info("youtube integration enabled")
+	}
+
+	svc := service.New(haClient, llmClient, policyClient, memoryRepo, ytClient, log)
 
 	alice.New(svc, alice.NewAuth(userRepo, cfg.AllowedEmails), log).Register(r)
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {

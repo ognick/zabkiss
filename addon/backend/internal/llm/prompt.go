@@ -234,6 +234,8 @@ func formatParam(name string, p domain.DeviceParam) string {
 		return name + ": bool"
 	case domain.ParamTypeRGB:
 		return name + ": [R, G, B]"
+	case domain.ParamTypeString:
+		return name + ": string"
 	default:
 		return name
 	}

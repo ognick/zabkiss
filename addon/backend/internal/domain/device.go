@@ -8,6 +8,7 @@ const (
 	ParamTypeSelect  ParamType = "select"
 	ParamTypeBoolean ParamType = "boolean"
 	ParamTypeRGB     ParamType = "rgb"
+	ParamTypeString  ParamType = "string"
 )
 
 // DeviceParam описывает один параметр сервиса с ограничениями.
