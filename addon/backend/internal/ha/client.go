@@ -168,9 +168,9 @@ func (c *haClient) fetchAndParseServices(ctx context.Context) (map[string][]appl
 func parseSelector(sel map[string]json.RawMessage) (param, bool) {
 	if raw, ok := sel["number"]; ok {
 		var s struct {
-			Min  *float64 `json:"min"`
-			Max  *float64 `json:"max"`
-			Step *float64 `json:"step"`
+			Min  *float64        `json:"min"`
+			Max  *float64        `json:"max"`
+			Step json.RawMessage `json:"step"` // can be "any" (string) or a number — ignore value
 		}
 		if err := json.Unmarshal(raw, &s); err == nil {
 			p := param{Type: domain.ParamTypeNumber}

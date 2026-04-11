@@ -1,6 +1,11 @@
 FROM golang:1.26-alpine AS builder
 
 WORKDIR /build
+
+# Кэшируем зависимости отдельным слоем — пересчитывается только при изменении go.mod/go.sum
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+
 COPY backend/ .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /zabkiss ./cmd/zabkiss
 

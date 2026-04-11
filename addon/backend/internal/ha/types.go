@@ -54,11 +54,33 @@ func toDevice(s entityState, svcs []applicableService) domain.Device {
 			Params:  domParams,
 		}
 	}
-	return domain.Device{
+	dev := domain.Device{
 		EntityID:     s.EntityID,
 		FriendlyName: s.FriendlyName,
 		State:        s.State,
 		Attributes:   s.Attributes,
 		Services:     domSvcs,
 	}
+
+	// For number entities, inject entity-specific min/max into set_value's value param.
+	// The generic /api/services response doesn't carry entity-bound ranges.
+	if s.haDomain() == "number" {
+		for i := range dev.Services {
+			if dev.Services[i].Service == "number.set_value" {
+				if dev.Services[i].Params == nil {
+					dev.Services[i].Params = make(map[string]domain.DeviceParam)
+				}
+				min, _ := s.Attributes["min"].(float64)
+				max, _ := s.Attributes["max"].(float64)
+				dev.Services[i].Params["value"] = domain.DeviceParam{
+					Type: domain.ParamTypeNumber,
+					Min:  min,
+					Max:  max,
+				}
+				break
+			}
+		}
+	}
+
+	return dev
 }
