@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -9,8 +11,11 @@ import (
 	"github.com/ognick/zabkiss/pkg/logger"
 )
 
-// haBGTimeout — таймаут для фоновых вызовов Home Assistant.
+// haBGTimeout — таймаут для фоновых вызовов Home Assistant при завершении сессии.
 const haBGTimeout = 15 * time.Second
+
+// haActionTimeout — таймаут на выполнение действий внутри активной сессии.
+const haActionTimeout = 10 * time.Second
 
 type haGateway interface {
 	GetDeviceInfos(ctx context.Context, entityIDs []string) ([]domain.Device, error)
@@ -89,12 +94,28 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, comma
 	}
 	s.log.Info("llm response", "status", result.Status, "reply", result.Reply, "actions", len(result.Actions), "remember", len(result.Remember), "forget", len(result.Forget))
 
+	msgs := append(history,
+		domain.ChatMessage{Role: "user", Content: command},
+		domain.ChatMessage{Role: "assistant", Content: result.Reply},
+	)
+
+	if result.Status == domain.CommandOK && len(result.Actions) > 0 {
+		if result.EndSession {
+			// Сессия завершается — результаты истории не нужны, запускаем фоново.
+			s.dispatchActions(result.Actions)
+		} else {
+			actionCtx, cancel := context.WithTimeout(context.Background(), haActionTimeout)
+			defer cancel()
+			actionResults := s.executeActions(actionCtx, result.Actions)
+			msgs = append(msgs, domain.ChatMessage{
+				Role:    "user",
+				Content: formatActionResults(actionResults),
+			})
+		}
+	}
+
 	if !result.EndSession {
-		updated := append(history,
-			domain.ChatMessage{Role: "user", Content: command},
-			domain.ChatMessage{Role: "assistant", Content: result.Reply},
-		)
-		s.setHistory(sessionID, updated)
+		s.setHistory(sessionID, msgs)
 	} else {
 		s.clearHistory(sessionID)
 	}
@@ -123,23 +144,51 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, comma
 	return result, nil
 }
 
-// dispatchActions запускает фоновую горутину для последовательного вызова HA.
+type actionResult struct {
+	TargetID string
+	Service  string
+	Err      error
+}
+
+// executeActions выполняет действия синхронно и возвращает результаты.
+func (s *SmartHomeService) executeActions(ctx context.Context, actions []domain.Action) []actionResult {
+	results := make([]actionResult, len(actions))
+	for i, action := range actions {
+		err := s.ha.CallService(ctx, action.TargetID, action.Service, action.Data)
+		results[i] = actionResult{TargetID: action.TargetID, Service: action.Service, Err: err}
+		if err != nil {
+			s.log.Error("ha action failed", "err", err, "target", action.TargetID, "service", action.Service)
+		}
+	}
+	return results
+}
+
+// dispatchActions запускает фоновую горутину (используется при EndSession=true).
 func (s *SmartHomeService) dispatchActions(actions []domain.Action) {
 	if len(actions) == 0 {
 		return
 	}
 	snapshot := make([]domain.Action, len(actions))
 	copy(snapshot, actions)
-
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), haBGTimeout)
 		defer cancel()
-		for _, action := range snapshot {
-			if err := s.ha.CallService(ctx, action.TargetID, action.Service, action.Data); err != nil {
-				s.log.Error("dispatch action", "err", err, "target", action.TargetID, "service", action.Service)
-			}
-		}
+		s.executeActions(ctx, snapshot)
 	}()
+}
+
+// formatActionResults формирует сообщение для истории диалога с результатами действий.
+func formatActionResults(results []actionResult) string {
+	var sb strings.Builder
+	sb.WriteString("[Результаты выполненных действий]\n")
+	for _, r := range results {
+		if r.Err != nil {
+			sb.WriteString(fmt.Sprintf("- %s %s: ошибка — %s\n", r.Service, r.TargetID, r.Err))
+		} else {
+			sb.WriteString(fmt.Sprintf("- %s %s: успешно\n", r.Service, r.TargetID))
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // ── session history ───────────────────────────────────────────────────────────
