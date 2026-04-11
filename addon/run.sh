@@ -12,6 +12,7 @@ if [ -f "$OPTIONS" ]; then
     HA_TOKEN=$(jq -r '.ha_token // ""' "$OPTIONS")
     HA_URL=$(jq -r '.ha_url // "http://homeassistant:8123"' "$OPTIONS")
     POLICY_CACHE_TTL_SECONDS=$(jq -r '.policy_cache_ttl_seconds // 60' "$OPTIONS")
+    YOUTUBE_API_KEY=$(jq -r '.youtube_api_key // ""' "$OPTIONS")
 else
     LOG_LEVEL="${LOG_LEVEL:-info}"
     OPENAI_API_KEY="${OPENAI_API_KEY:-}"
@@ -21,6 +22,7 @@ else
     HA_TOKEN="${HA_TOKEN:-}"
     HA_URL="${HA_URL:-http://homeassistant:8123}"
     POLICY_CACHE_TTL_SECONDS="${POLICY_CACHE_TTL_SECONDS:-60}"
+    YOUTUBE_API_KEY="${YOUTUBE_API_KEY:-}"
 fi
 
 export ADDR=":8080"
@@ -33,5 +35,6 @@ export ALLOWED_EMAILS
 export HA_TOKEN
 export HA_URL
 export POLICY_CACHE_TTL_SECONDS
+export YOUTUBE_API_KEY
 
 exec /usr/bin/zabkiss
