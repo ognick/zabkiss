@@ -17,9 +17,6 @@ const (
 	haBGTimeout = 15 * time.Second
 	// haActionTimeout — таймаут на выполнение действий в активной сессии.
 	haActionTimeout = 10 * time.Second
-	// llmBGTimeout — таймаут для LLM-горутины; больше Alice-дедлайна,
-	// чтобы LLM мог завершиться даже после таймаута Alice.
-	llmBGTimeout = 30 * time.Second
 )
 
 type haGateway interface {
@@ -70,11 +67,6 @@ func New(ha haGateway, llm llmGateway, policy policyGateway, memoryRepo memoryGa
 	}
 }
 
-type llmResult struct {
-	res domain.CommandResult
-	err error
-}
-
 // Process выполняет голосовую команду пользователя в рамках сессии.
 //
 // LLM запускается в отдельной горутине с собственным фоновым контекстом
@@ -112,57 +104,26 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, comma
 	history := s.getHistory(sessionID)
 	s.log.Debug("session history", "session", sessionID, "messages", len(history))
 
-	// LLM запускается с фоновым контекстом, независимым от Alice-дедлайна.
-	llmCtx, llmCancel := context.WithTimeout(context.Background(), llmBGTimeout)
-	ch := make(chan llmResult, 1)
-	go func() {
-		defer llmCancel()
-		res, err := s.llm.Execute(llmCtx, command, devices, history, memFacts)
-		ch <- llmResult{res, err}
-	}()
-
-	select {
-	case lr := <-ch:
-		// LLM ответил до дедлайна Alice.
-		if lr.err != nil {
-			s.log.Error("llm execute failed", "err", lr.err)
-			return domain.CommandResult{}, lr.err
-		}
-		result := lr.res
-		s.log.Info("llm response", "status", result.Status, "reply", result.Reply,
-			"actions", len(result.Actions), "remember", len(result.Remember), "forget", len(result.Forget))
-
-		// Сразу пишем основные сообщения в историю — без ожидания HA-действий.
-		if !result.EndSession {
-			s.appendHistory(sessionID, requestTime, []domain.ChatMessage{
-				{Role: "user", Content: command},
-				{Role: "assistant", Content: result.Reply},
-			})
-		}
-
-		// Постобработка (HA-действия, результаты, память) — в фоне, не задерживает ответ.
-		go s.postProcess(sessionID, userID, requestTime, result)
-
-		return result, nil
-
-	case <-ctx.Done():
-		// Alice-дедлайн истёк раньше LLM. Возвращаем ошибку немедленно.
-		// LLM-горутина продолжает работу и сохранит результат в историю.
-		go func() {
-			lr := <-ch
-			if lr.err == nil {
-				s.log.Info("llm completed after deadline", "session", sessionID)
-				if !lr.res.EndSession {
-					s.appendHistory(sessionID, requestTime, []domain.ChatMessage{
-						{Role: "user", Content: command},
-						{Role: "assistant", Content: lr.res.Reply},
-					})
-				}
-				s.postProcess(sessionID, userID, requestTime, lr.res)
-			}
-		}()
-		return domain.CommandResult{}, ctx.Err()
+	result, err := s.llm.Execute(ctx, command, devices, history, memFacts)
+	if err != nil {
+		s.log.Error("llm execute failed", "err", err)
+		return domain.CommandResult{}, err
 	}
+	s.log.Info("llm response", "status", result.Status, "reply", result.Reply,
+		"actions", len(result.Actions), "remember", len(result.Remember), "forget", len(result.Forget))
+
+	// Сразу пишем основные сообщения в историю — без ожидания HA-действий.
+	if !result.EndSession {
+		s.appendHistory(sessionID, requestTime, []domain.ChatMessage{
+			{Role: "user", Content: command},
+			{Role: "assistant", Content: result.Reply},
+		})
+	}
+
+	// Постобработка (HA-действия, результаты, память) — в фоне, не задерживает ответ.
+	go s.postProcess(sessionID, userID, requestTime, result)
+
+	return result, nil
 }
 
 // postProcess выполняет HA-действия, добавляет их результаты в историю
