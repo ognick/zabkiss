@@ -70,3 +70,5 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/ognick/zabkiss
             org.opencontainers.image.version=${{ needs.tag.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
