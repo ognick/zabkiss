@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/ognick/zabkiss/internal/domain"
 	"github.com/ognick/zabkiss/pkg/logger"
@@ -13,7 +14,7 @@ import (
 
 // Client отправляет запрос в LLM и возвращает структурированный ответ.
 type Client interface {
-	Execute(ctx context.Context, command string, devices []domain.Device, history []domain.ChatMessage) (domain.CommandResult, error)
+	Execute(ctx context.Context, command string, devices []domain.Device, history []domain.ChatMessage, memoryFacts []domain.MemoryFact) (domain.CommandResult, error)
 }
 
 type openAIClient struct {
@@ -55,6 +56,8 @@ type llmResponse struct {
 	Reason     string      `json:"reason"`
 	Actions    []llmAction `json:"actions"`
 	EndSession bool        `json:"end_session"`
+	Remember   []string    `json:"remember"`
+	Forget     []string    `json:"forget"`
 }
 
 type llmAction struct {
@@ -63,8 +66,8 @@ type llmAction struct {
 	Data     map[string]any `json:"data"`
 }
 
-func (c *openAIClient) Execute(ctx context.Context, command string, devices []domain.Device, history []domain.ChatMessage) (domain.CommandResult, error) {
-	systemPrompt := BuildSystemPrompt(devices)
+func (c *openAIClient) Execute(ctx context.Context, command string, devices []domain.Device, history []domain.ChatMessage, memoryFacts []domain.MemoryFact) (domain.CommandResult, error) {
+	systemPrompt := BuildSystemPrompt(devices, memoryFacts)
 
 	messages := make([]message, 0, len(history)+2)
 	messages = append(messages, message{Role: "system", Content: systemPrompt})
@@ -90,7 +93,7 @@ func (c *openAIClient) Execute(ctx context.Context, command string, devices []do
 		"devices", len(devices),
 		"history_len", len(history),
 	)
-	c.log.Debug("llm system prompt", "prompt", systemPrompt)
+	fmt.Fprintf(os.Stderr, "\n=== LLM PROMPT ===\n%s\n==================\n", systemPrompt)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(data))
 	if err != nil {
@@ -119,7 +122,7 @@ func (c *openAIClient) Execute(ctx context.Context, command string, devices []do
 	}
 
 	rawContent := chatResp.Choices[0].Message.Content
-	c.log.Debug("llm raw response", "content", rawContent)
+	fmt.Fprintf(os.Stderr, "\n=== LLM RESPONSE ===\n%s\n====================\n", rawContent)
 
 	var raw llmResponse
 	if err := json.Unmarshal([]byte(rawContent), &raw); err != nil {
@@ -143,5 +146,7 @@ func (c *openAIClient) Execute(ctx context.Context, command string, devices []do
 		Reply:      raw.Reply,
 		Actions:    actions,
 		EndSession: raw.EndSession,
+		Remember:   raw.Remember,
+		Forget:     raw.Forget,
 	}, nil
 }

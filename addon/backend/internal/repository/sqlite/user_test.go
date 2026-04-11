@@ -10,7 +10,7 @@ import (
 	"github.com/ognick/zabkiss/internal/domain"
 )
 
-func newTestRepo(t *testing.T) *UserRepo {
+func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -18,114 +18,121 @@ func newTestRepo(t *testing.T) *UserRepo {
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
+	return db
+}
 
-	repo, err := NewUserRepo(db)
+func TestUserRepo_Upsert_CreatesUser(t *testing.T) {
+	repo, err := NewUserRepo(newTestDB(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return repo
-}
 
-func TestGetByToken_NotFound(t *testing.T) {
-	repo := newTestRepo(t)
-
-	user, err := repo.GetByToken(context.Background(), "nonexistent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user != nil {
-		t.Errorf("expected nil, got %+v", user)
-	}
-}
-
-func TestUpsertAndGetByToken(t *testing.T) {
-	repo := newTestRepo(t)
-	user := domain.User{ID: "u1", Name: "Иван", Email: "ivan@example.com", Token: "tok1"}
-
+	user := domain.User{ID: "u1", Name: "Иван", Email: "ivan@example.com"}
 	if err := repo.Upsert(context.Background(), user); err != nil {
-		t.Fatal(err)
+		t.Fatalf("Upsert: %v", err)
 	}
 
-	got, err := repo.GetByToken(context.Background(), "tok1")
+	got, err := repo.GetByID(context.Background(), "u1")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if got == nil {
-		t.Fatal("expected user, got nil")
-	}
-	if got.ID != "u1" {
-		t.Errorf("ID: got %q, want u1", got.ID)
+		t.Fatalf("GetByID: %v", err)
 	}
 	if got.Name != "Иван" {
 		t.Errorf("Name: got %q, want Иван", got.Name)
 	}
-	if got.Email != "ivan@example.com" {
-		t.Errorf("Email: got %q", got.Email)
-	}
-	if got.Token != "tok1" {
-		t.Errorf("Token: got %q, want tok1", got.Token)
-	}
 }
 
-func TestUpsert_UpdatesExistingUser(t *testing.T) {
-	repo := newTestRepo(t)
-
-	original := domain.User{ID: "u1", Name: "Иван", Email: "old@ya.ru", Token: "tok1"}
-	if err := repo.Upsert(context.Background(), original); err != nil {
-		t.Fatal(err)
-	}
-
-	updated := domain.User{ID: "u1", Name: "Иван Иванов", Email: "new@ya.ru", Token: "tok1"}
-	if err := repo.Upsert(context.Background(), updated); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := repo.GetByToken(context.Background(), "tok1")
+func TestUserRepo_Upsert_UpdatesExistingUser(t *testing.T) {
+	repo, err := NewUserRepo(newTestDB(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Name != "Иван Иванов" {
-		t.Errorf("Name: got %q, want Иван Иванов", got.Name)
+
+	repo.Upsert(context.Background(), domain.User{ID: "u1", Name: "Старое", Email: "old@ya.ru"}) //nolint:errcheck
+
+	if err := repo.Upsert(context.Background(), domain.User{ID: "u1", Name: "Новое", Email: "new@ya.ru"}); err != nil {
+		t.Fatal(err)
 	}
-	if got.Email != "new@ya.ru" {
-		t.Errorf("Email: got %q, want new@ya.ru", got.Email)
+
+	got, err := repo.GetByID(context.Background(), "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Новое" {
+		t.Errorf("Name: got %q, want Новое", got.Name)
 	}
 }
 
-func TestUpsert_MultipleTokensSameUser(t *testing.T) {
-	repo := newTestRepo(t)
-
-	u1 := domain.User{ID: "u1", Name: "Иван", Email: "ivan@ya.ru", Token: "tok1"}
-	if err := repo.Upsert(context.Background(), u1); err != nil {
-		t.Fatal(err)
-	}
-	u2 := domain.User{ID: "u1", Name: "Иван", Email: "ivan@ya.ru", Token: "tok2"}
-	if err := repo.Upsert(context.Background(), u2); err != nil {
+func TestMemoryRepo_AddAndGet(t *testing.T) {
+	repo, err := NewMemoryRepo(newTestDB(t))
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	got1, err := repo.GetByToken(context.Background(), "tok1")
-	if err != nil || got1 == nil {
-		t.Fatalf("tok1 lookup failed: %v", err)
+	ctx := context.Background()
+	if err := repo.AddFacts(ctx, "u1", []string{"любит кофе", "не любит холод"}); err != nil {
+		t.Fatal(err)
 	}
-	got2, err := repo.GetByToken(context.Background(), "tok2")
-	if err != nil || got2 == nil {
-		t.Fatalf("tok2 lookup failed: %v", err)
+
+	facts, err := repo.GetFacts(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got1.ID != got2.ID {
-		t.Error("both tokens should belong to the same user")
+	if len(facts) != 2 {
+		t.Errorf("want 2 facts, got %d: %v", len(facts), facts)
 	}
 }
 
-func TestUpsert_DuplicateTokenIsIgnored(t *testing.T) {
-	repo := newTestRepo(t)
-
-	user := domain.User{ID: "u1", Name: "Иван", Email: "ivan@ya.ru", Token: "tok1"}
-	if err := repo.Upsert(context.Background(), user); err != nil {
+func TestMemoryRepo_ForgetFacts(t *testing.T) {
+	repo, err := NewMemoryRepo(newTestDB(t))
+	if err != nil {
 		t.Fatal(err)
 	}
-	// Same token — INSERT OR IGNORE should not fail
-	if err := repo.Upsert(context.Background(), user); err != nil {
-		t.Errorf("duplicate token insert should be ignored, got: %v", err)
+
+	ctx := context.Background()
+	repo.AddFacts(ctx, "u1", []string{"любит кофе", "любит чай"}) //nolint:errcheck
+
+	// Получаем факты чтобы узнать ID
+	facts, err := repo.GetFacts(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Находим ID факта "любит кофе"
+	var coffeeID string
+	for _, f := range facts {
+		if f.Text == "любит кофе" {
+			coffeeID = f.ID
+		}
+	}
+	if coffeeID == "" {
+		t.Fatal("fact 'любит кофе' not found")
+	}
+
+	repo.ForgetFacts(ctx, "u1", []string{coffeeID}) //nolint:errcheck
+
+	remaining, err := repo.GetFacts(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 1 || remaining[0].Text != "любит чай" {
+		t.Errorf("want [любит чай], got %v", remaining)
+	}
+}
+
+func TestMemoryRepo_DuplicateFactIgnored(t *testing.T) {
+	repo, err := NewMemoryRepo(newTestDB(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	repo.AddFacts(ctx, "u1", []string{"любит кофе"}) //nolint:errcheck
+	repo.AddFacts(ctx, "u1", []string{"любит кофе"}) //nolint:errcheck
+
+	facts, err := repo.GetFacts(ctx, "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 1 {
+		t.Errorf("want 1 fact (dedup), got %d: %v", len(facts), facts)
 	}
 }

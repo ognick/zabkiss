@@ -35,7 +35,7 @@ func TestLoad(t *testing.T) {
 		{
 			name:     "defaults",
 			wantAddr: ":8080",
-			wantDB:   "zabkiss.db",
+			wantDB:   "/data/zabkiss.db",
 			wantLog:  "debug",
 		},
 		{

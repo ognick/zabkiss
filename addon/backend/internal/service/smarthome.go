@@ -10,61 +10,60 @@ import (
 )
 
 // haBGTimeout — таймаут для фоновых вызовов Home Assistant.
-// Достаточно большой для обработки, но ограниченный во избежание утечек горутин.
 const haBGTimeout = 15 * time.Second
 
-// haGateway — интерфейс адаптера Home Assistant.
 type haGateway interface {
 	GetDeviceInfos(ctx context.Context, entityIDs []string) ([]domain.Device, error)
 	CallService(ctx context.Context, entityID, service string, params map[string]any) error
 }
 
-// llmGateway — интерфейс адаптера LLM.
 type llmGateway interface {
-	Execute(ctx context.Context, command string, devices []domain.Device, history []domain.ChatMessage) (domain.CommandResult, error)
+	Execute(ctx context.Context, command string, devices []domain.Device, history []domain.ChatMessage, memoryFacts []domain.MemoryFact) (domain.CommandResult, error)
 }
 
-// policyGateway — интерфейс клиента политики.
 type policyGateway interface {
 	GetEntities(ctx context.Context) ([]string, error)
 }
 
-// SmartHomeService оркестрирует выполнение голосовых команд умного дома:
-// получает список разрешённых устройств, их состояние, обращается к LLM,
-// управляет историей сессии и выполняет действия в фоне.
-type SmartHomeService struct {
-	ha     haGateway
-	llm    llmGateway
-	policy policyGateway
-	log    logger.Logger
-
-	sessionMu      sync.Mutex
-	sessionHistory map[string][]domain.ChatMessage // sessionID → история диалога
+type memoryGateway interface {
+	GetFacts(ctx context.Context, userID string) ([]domain.MemoryFact, error)
+	AddFacts(ctx context.Context, userID string, facts []string) error
+	ForgetFacts(ctx context.Context, userID string, factIDs []string) error
 }
 
-// New создаёт SmartHomeService с заданными зависимостями.
-func New(ha haGateway, llm llmGateway, policy policyGateway, log logger.Logger) *SmartHomeService {
+// SmartHomeService оркестрирует выполнение голосовых команд умного дома.
+type SmartHomeService struct {
+	ha         haGateway
+	llm        llmGateway
+	policy     policyGateway
+	memoryRepo memoryGateway
+	log        logger.Logger
+
+	sessionMu      sync.Mutex
+	sessionHistory map[string][]domain.ChatMessage
+}
+
+func New(ha haGateway, llm llmGateway, policy policyGateway, memoryRepo memoryGateway, log logger.Logger) *SmartHomeService {
 	return &SmartHomeService{
 		ha:             ha,
 		llm:            llm,
 		policy:         policy,
+		memoryRepo:     memoryRepo,
 		log:            log,
 		sessionHistory: make(map[string][]domain.ChatMessage),
 	}
 }
 
 // Process выполняет голосовую команду пользователя в рамках сессии.
-// Контекст ctx должен нести дедлайн, установленный хендлером на основе Request-Timeout.
-// При статусе ok запускает фоновую задачу вызова HA и возвращает управление сразу.
-func (s *SmartHomeService) Process(ctx context.Context, sessionID, command string) (domain.CommandResult, error) {
-	s.log.Info("process command", "session", sessionID, "command", command)
+func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, command string) (domain.CommandResult, error) {
+	s.log.Info("process command", "session", sessionID, "user", userID, "command", command)
 
 	entities, err := s.policy.GetEntities(ctx)
 	if err != nil {
 		s.log.Error("policy fetch failed", "err", err)
 		return domain.CommandResult{}, err
 	}
-	s.log.Info("policy entities", "count", len(entities), "entities", entities)
+	s.log.Info("policy entities", "count", len(entities))
 
 	devices, err := s.ha.GetDeviceInfos(ctx, entities)
 	if err != nil {
@@ -73,17 +72,23 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, command strin
 	}
 	s.log.Info("ha devices loaded", "count", len(devices))
 
+	memFacts, err := s.memoryRepo.GetFacts(ctx, userID)
+	if err != nil {
+		s.log.Warn("memory fetch failed", "user", userID, "err", err)
+		memFacts = nil
+	}
+	s.log.Debug("user memory facts", "user", userID, "count", len(memFacts))
+
 	history := s.getHistory(sessionID)
 	s.log.Debug("session history", "session", sessionID, "messages", len(history))
 
-	result, err := s.llm.Execute(ctx, command, devices, history)
+	result, err := s.llm.Execute(ctx, command, devices, history, memFacts)
 	if err != nil {
 		s.log.Error("llm execute failed", "err", err)
 		return domain.CommandResult{}, err
 	}
-	s.log.Info("llm response", "status", result.Status, "reply", result.Reply, "actions", len(result.Actions))
+	s.log.Info("llm response", "status", result.Status, "reply", result.Reply, "actions", len(result.Actions), "remember", len(result.Remember), "forget", len(result.Forget))
 
-	// Всегда обновляем историю диалога, если сессия продолжается.
 	if !result.EndSession {
 		updated := append(history,
 			domain.ChatMessage{Role: "user", Content: command},
@@ -92,6 +97,21 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, command strin
 		s.setHistory(sessionID, updated)
 	} else {
 		s.clearHistory(sessionID)
+	}
+
+	if len(result.Remember) > 0 {
+		if err := s.memoryRepo.AddFacts(ctx, userID, result.Remember); err != nil {
+			s.log.Warn("add facts failed", "user", userID, "err", err)
+		} else {
+			s.log.Info("facts remembered", "user", userID, "count", len(result.Remember))
+		}
+	}
+	if len(result.Forget) > 0 {
+		if err := s.memoryRepo.ForgetFacts(ctx, userID, result.Forget); err != nil {
+			s.log.Warn("forget facts failed", "user", userID, "err", err)
+		} else {
+			s.log.Info("facts forgotten", "user", userID, "count", len(result.Forget))
+		}
 	}
 
 	if result.Status == domain.CommandOK {
@@ -103,8 +123,7 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, command strin
 	return result, nil
 }
 
-// dispatchActions запускает фоновую горутину, которая последовательно
-// вызывает CallService для каждого действия с собственным таймаутом.
+// dispatchActions запускает фоновую горутину для последовательного вызова HA.
 func (s *SmartHomeService) dispatchActions(actions []domain.Action) {
 	if len(actions) == 0 {
 		return

@@ -22,10 +22,18 @@ type Action struct {
 	Data     map[string]any // параметры сервиса
 }
 
+// MemoryFact — факт из долгосрочной памяти пользователя.
+type MemoryFact struct {
+	ID   string // уникальный идентификатор факта (для точного удаления)
+	Text string // текст факта
+}
+
 // CommandResult — результат выполнения голосовой команды.
 type CommandResult struct {
 	Status     CommandStatus
 	Reply      string   // что произносится вслух
 	Actions    []Action // действия для HA (пусто при reject/clarify)
 	EndSession bool     // завершить ли сессию Алисы
+	Remember   []string // тексты новых фактов для сохранения
+	Forget     []string // ID фактов для удаления
 }

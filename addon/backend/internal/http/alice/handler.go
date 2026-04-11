@@ -27,7 +27,7 @@ var (
 const requestBudget = 500 * time.Millisecond
 
 type commandService interface {
-	Process(ctx context.Context, sessionID, command string) (domain.CommandResult, error)
+	Process(ctx context.Context, sessionID, userID, command string) (domain.CommandResult, error)
 }
 
 type userResolver interface {
@@ -113,7 +113,7 @@ func (h *Handler) webhook(w http.ResponseWriter, r *http.Request) {
 
 	h.log.Info("auth ok", "session", req.Session.SessionID, "user", user.Name, "email", user.Email)
 
-	result, err := h.svc.Process(ctx, req.Session.SessionID, req.Request.Command)
+	result, err := h.svc.Process(ctx, req.Session.SessionID, user.ID, req.Request.Command)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			msg := fmt.Sprintf("%s, не успел обработать запрос, попробуйте ещё раз", user.Name)

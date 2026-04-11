@@ -17,8 +17,9 @@ import (
 	"github.com/ognick/zabkiss/internal/http/alice"
 	"github.com/ognick/zabkiss/internal/llm"
 	"github.com/ognick/zabkiss/internal/policy"
-	"github.com/ognick/zabkiss/internal/service"
+	memoryrepo "github.com/ognick/zabkiss/internal/repository/memory"
 	sqliterepo "github.com/ognick/zabkiss/internal/repository/sqlite"
+	"github.com/ognick/zabkiss/internal/service"
 	"github.com/ognick/zabkiss/pkg/httpserver"
 	"github.com/ognick/zabkiss/pkg/logger"
 	"github.com/ognick/zabkiss/pkg/sqlitedb"
@@ -40,9 +41,13 @@ func main() {
 		return
 	}
 
-	userRepo, err := sqliterepo.NewUserRepo(db.DB)
+	// Токены хранятся в памяти (временные данные, не переживают рестарт)
+	userRepo := memoryrepo.NewUserRepo()
+
+	// Личная память пользователей хранится в SQLite (персистентно)
+	memoryRepo, err := sqliterepo.NewMemoryRepo(db.DB)
 	if err != nil {
-		log.Error("user repo", "err", err)
+		log.Error("memory repo", "err", err)
 		return
 	}
 
@@ -61,7 +66,7 @@ func main() {
 	)
 	haClient := ha.NewClient(cfg.HAURL, cfg.HAToken)
 	llmClient := llm.NewClient(cfg.LLMBaseURL, cfg.OpenAIAPIKey, cfg.LLMModel, log)
-	svc := service.New(haClient, llmClient, policyClient, log)
+	svc := service.New(haClient, llmClient, policyClient, memoryRepo, log)
 
 	alice.New(svc, alice.NewAuth(userRepo, cfg.AllowedEmails), log).Register(r)
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {

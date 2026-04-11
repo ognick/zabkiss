@@ -55,6 +55,6 @@ type mockService struct {
 	err    error
 }
 
-func (m *mockService) Process(_ context.Context, _, _ string) (domain.CommandResult, error) {
+func (m *mockService) Process(_ context.Context, _, _, _ string) (domain.CommandResult, error) {
 	return m.result, m.err
 }

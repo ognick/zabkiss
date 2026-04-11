@@ -2,7 +2,6 @@ package e2e
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,11 +12,10 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	_ "modernc.org/sqlite"
 
 	"github.com/ognick/zabkiss/internal/domain"
 	"github.com/ognick/zabkiss/internal/http/alice"
-	sqliterepo "github.com/ognick/zabkiss/internal/repository/sqlite"
+	memoryrepo "github.com/ognick/zabkiss/internal/repository/memory"
 	"github.com/ognick/zabkiss/pkg/httpserver"
 	"github.com/ognick/zabkiss/pkg/logger"
 )
@@ -93,7 +91,7 @@ type serviceStub struct {
 	err   error
 }
 
-func (s *serviceStub) Process(_ context.Context, _, _ string) (domain.CommandResult, error) {
+func (s *serviceStub) Process(_ context.Context, _, _, _ string) (domain.CommandResult, error) {
 	if s.err != nil {
 		return domain.CommandResult{}, s.err
 	}
@@ -103,7 +101,7 @@ func (s *serviceStub) Process(_ context.Context, _, _ string) (domain.CommandRes
 // panicServiceStub simulates a catastrophic failure in the service layer.
 type panicServiceStub struct{}
 
-func (s *panicServiceStub) Process(_ context.Context, _, _ string) (domain.CommandResult, error) {
+func (s *panicServiceStub) Process(_ context.Context, _, _, _ string) (domain.CommandResult, error) {
 	panic("simulated service panic")
 }
 
@@ -133,17 +131,7 @@ type serverConfig struct {
 func newServer(t *testing.T, cfg serverConfig) *testServer {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { db.Close() })
-
-	userRepo, err := sqliterepo.NewUserRepo(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	userRepo := memoryrepo.NewUserRepo()
 
 	yandex := newYandexMock(t)
 	auth := alice.NewAuth(userRepo, cfg.allowedEmails).WithHTTPClient(yandex.client())
@@ -173,21 +161,11 @@ func newServer(t *testing.T, cfg serverConfig) *testServer {
 // newServerWithCustomService is used when tests need non-standard service behaviour
 // (e.g., panic injection). Accepts any value implementing the commandService interface.
 func newServerWithCustomService(t *testing.T, svc interface {
-	Process(context.Context, string, string) (domain.CommandResult, error)
+	Process(context.Context, string, string, string) (domain.CommandResult, error)
 }, cfg serverConfig) *testServer {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { db.Close() })
-
-	userRepo, err := sqliterepo.NewUserRepo(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	userRepo := memoryrepo.NewUserRepo()
 
 	yandex := newYandexMock(t)
 	auth := alice.NewAuth(userRepo, cfg.allowedEmails).WithHTTPClient(yandex.client())

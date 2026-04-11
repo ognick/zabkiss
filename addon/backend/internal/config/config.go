@@ -25,7 +25,7 @@ func Load() *Config {
 	_ = godotenv.Load()
 	return &Config{
 		Addr:                  getEnv("ADDR", ":8080"),
-		DBPath:                getEnv("DB_PATH", "zabkiss.db"),
+		DBPath:                getEnv("DB_PATH", "/data/zabkiss.db"),
 		LogLevel:              getEnv("LOG_LEVEL", "debug"),
 		OpenAIAPIKey:          getEnv("OPENAI_API_KEY", ""),
 		LLMBaseURL:            getEnv("LLM_BASE_URL", "https://api.openai.com/v1"),

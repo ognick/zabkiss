@@ -12,7 +12,6 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,8 +33,8 @@ import (
 	"github.com/ognick/zabkiss/internal/ha"
 	"github.com/ognick/zabkiss/internal/http/alice"
 	"github.com/ognick/zabkiss/internal/policy"
+	memoryrepo "github.com/ognick/zabkiss/internal/repository/memory"
 	"github.com/ognick/zabkiss/internal/service"
-	sqliterepo "github.com/ognick/zabkiss/internal/repository/sqlite"
 	"github.com/ognick/zabkiss/pkg/httpserver"
 )
 
@@ -355,17 +354,8 @@ func seedPolicy(t *testing.T, haURL, token string, entities []string) {
 func newIntegrationServer(t *testing.T, haURL, haToken string, allowedEmails []string) *testServer {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { db.Close() })
-
-	userRepo, err := sqliterepo.NewUserRepo(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	userRepo := memoryrepo.NewUserRepo()
+	memRepo := memoryrepo.NewMemoryRepo()
 
 	yandex := newYandexMock(t)
 	log := newTestLogger(t)
@@ -373,7 +363,7 @@ func newIntegrationServer(t *testing.T, haURL, haToken string, allowedEmails []s
 	// Real HA + policy clients; stub LLM so we don't call OpenAI in tests.
 	haClient := ha.NewClient(haURL, haToken)
 	policyClient := policy.NewClient(haURL, haToken, 30*time.Second, log)
-	svc := service.New(haClient, &integrationLLMStub{reply: "включаю свет"}, policyClient, log)
+	svc := service.New(haClient, &integrationLLMStub{reply: "включаю свет"}, policyClient, memRepo, log)
 
 	auth := alice.NewAuth(userRepo, allowedEmails).WithHTTPClient(yandex.client())
 
@@ -392,8 +382,8 @@ type integrationLLMStub struct {
 	reply string
 }
 
-func (s *integrationLLMStub) Execute(_ context.Context, _ string, _ []domain.Device, _ []domain.ChatMessage) (domain.CommandResult, error) {
-	return domain.CommandResult{Status: domain.CommandOK, Reply: s.reply}, nil
+func (s *integrationLLMStub) Execute(_ context.Context, _ string, _ []domain.Device, _ []domain.ChatMessage, _ []domain.MemoryFact) (domain.CommandResult, error) {
+	return domain.CommandResult{Status: domain.CommandOK, Reply: s.reply, EndSession: true}, nil
 }
 
 // ── File utils ────────────────────────────────────────────────────────────────
