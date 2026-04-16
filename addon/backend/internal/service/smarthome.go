@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
 	"sync"
@@ -408,10 +409,34 @@ func joinReplies(a, b string) string {
 	return strings.TrimRight(a, " .") + ". " + b
 }
 
-// withOpenQuestion добавляет "Что ещё?" если ответ не заканчивается вопросом.
+var openQuestions = []string{
+	"Что ещё?",
+	"Чем ещё помочь?",
+	"Что-нибудь ещё?",
+	"Есть ещё пожелания?",
+	"Что-то ещё нужно?",
+	"Ещё что-то сделать?",
+	"Есть ещё команды?",
+	"Что ещё включить?",
+	"Нужно ещё что-то?",
+	"Что ещё настроить?",
+	"Ещё что-нибудь?",
+	"Могу ещё помочь?",
+	"Что добавить?",
+	"Есть ещё задачи?",
+	"Что ещё изменить?",
+	"Ещё что-то нужно?",
+	"Что ещё сделать?",
+	"Есть ещё просьбы?",
+	"Что ещё выключить?",
+	"Помочь ещё с чем-то?",
+}
+
+// withOpenQuestion добавляет случайный открытый вопрос, если ответ не заканчивается вопросом.
 func withOpenQuestion(reply string) string {
 	if strings.HasSuffix(strings.TrimRight(reply, " "), "?") {
 		return reply
 	}
-	return strings.TrimRight(reply, " ") + " Что ещё?"
+	q := openQuestions[rand.Intn(len(openQuestions))]
+	return strings.TrimRight(reply, " ") + " " + q
 }
