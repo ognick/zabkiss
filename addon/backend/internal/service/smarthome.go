@@ -141,10 +141,11 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, comma
 		if r.err != nil {
 			return domain.CommandResult{}, r.err
 		}
-		reply := r.result.Reply
 		if pendingReply != "" {
-			reply = pendingReply + ". " + reply
-			r.result.Reply = reply
+			r.result.Reply = joinReplies(pendingReply, r.result.Reply)
+		}
+		if !r.result.EndSession {
+			r.result.Reply = withOpenQuestion(r.result.Reply)
 		}
 		return r.result, nil
 
@@ -168,7 +169,7 @@ func (s *SmartHomeService) Process(ctx context.Context, sessionID, userID, comma
 
 		deferredMsg := "Обрабатываю запрос, спроси чуть позже"
 		if pendingReply != "" {
-			deferredMsg = pendingReply + ". " + deferredMsg
+			deferredMsg = joinReplies(pendingReply, deferredMsg)
 		}
 		return domain.CommandResult{
 			Status: domain.CommandOK,
@@ -398,4 +399,19 @@ func (s *SmartHomeService) clearHistory(sessionID string) {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
 	delete(s.sessionHistory, sessionID)
+}
+
+// ── reply helpers ─────────────────────────────────────────────────────────────
+
+// joinReplies объединяет два ответа через ". ", убирая лишние точки на стыке.
+func joinReplies(a, b string) string {
+	return strings.TrimRight(a, " .") + ". " + b
+}
+
+// withOpenQuestion добавляет "Что ещё?" если ответ не заканчивается вопросом.
+func withOpenQuestion(reply string) string {
+	if strings.HasSuffix(strings.TrimRight(reply, " "), "?") {
+		return reply
+	}
+	return strings.TrimRight(reply, " ") + " Что ещё?"
 }
